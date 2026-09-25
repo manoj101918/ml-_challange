@@ -1,0 +1,12 @@
+# Competition data: too large for GitHub (files up to ~500 MB) and not ours to redistribute
+dataset/
+
+# Generated submission files
+output/*
+!output/.gitkeep
+
+# Python / Jupyter / OS clutter
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store
