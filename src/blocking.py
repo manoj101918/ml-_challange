@@ -84,3 +84,80 @@ def generate_candidates(s1, index, top_k=50, ranking="all", batch_size=1_000):
     candidates["source1_entity_id"] = s1["entity_id"].to_numpy()[candidates["s1_row"]]
     candidates["candidate_id"] = index["pool_ids"].to_numpy()[candidates["pool_row"]]
     return candidates
+
+
+# ---------------------------------------------------------------- scalable version (Phase 13: full test set)
+
+def _hash(keys):
+    """Text keys -> 64-bit integers (8 bytes each instead of ~60 bytes of text). Collisions are negligible."""
+    return pd.util.hash_pandas_object(pd.Series(keys), index=False).to_numpy()
+
+
+def build_index_hashed(s1, pool_batches, n_pool, max_df, key_types=ALL_KEY_TYPES, query_chunk=100_000, log=print):
+    """Same index as build_index, but keys are hashed and the pool is given as an iterable of DataFrames
+    (entity_id, country, name_norm, addr_norm) - e.g. the records of ONE country, read in chunks.
+
+    n_pool = size of the WHOLE pool (all countries), so idf = log(n_pool / df) is on the same scale as in training.
+    """
+    start = time.time()
+    q_parts = []
+    for first in range(0, len(s1), query_chunk):
+        part = s1.iloc[first:first + query_chunk]
+        k = record_keys(part["name_norm"], part["addr_norm"], part["country"], key_types)
+        q_parts.append(pd.DataFrame({"s1_row": (k["row"].to_numpy() + first).astype("int32"),
+                                     "h": _hash(k["key"]), "is_name": k["is_name"].to_numpy()}))
+    q = pd.concat(q_parts, ignore_index=True).drop_duplicates(["s1_row", "h"])
+    vocabulary, inverse = np.unique(q["h"].to_numpy(), return_inverse=True)
+    q["code"] = inverse.astype("int32")
+    is_name_key = np.zeros(len(vocabulary), dtype=bool)
+    is_name_key[q["code"].to_numpy()] = q["is_name"].to_numpy().astype(bool)
+    q = q[["s1_row", "code"]]
+
+    df = np.zeros(len(vocabulary), dtype=np.int64)
+    pool_ids, pool_keys, offset = [], [], 0
+    for chunk in pool_batches:
+        chunk = chunk.reset_index(drop=True)
+        pool_ids.append(chunk["entity_id"])
+        k = record_keys(chunk["name_norm"], chunk["addr_norm"], chunk["country"], key_types)
+        h = _hash(k["key"])
+        position = np.searchsorted(vocabulary, h)
+        position[position == len(vocabulary)] = 0
+        hit = vocabulary[position] == h
+        k = pd.DataFrame({"pool_row": (k["row"].to_numpy()[hit] + offset).astype("int32"),
+                          "code": position[hit].astype("int32")}).drop_duplicates()
+        chunk_counts = np.bincount(k["code"], minlength=len(vocabulary))
+        df += chunk_counts
+        pool_keys.append(k[chunk_counts[k["code"]] <= max_df])
+        offset += len(chunk)
+    pool_ids = pd.concat(pool_ids, ignore_index=True)
+    pool_keys = pd.concat(pool_keys, ignore_index=True)
+    pool_keys = pool_keys[df[pool_keys["code"]] <= max_df]
+    q = q[df[q["code"]] <= max_df]
+    gc.collect()
+    log(f"  hashed index: {len(s1):,} queries, {len(q):,} query keys, {len(pool_keys):,} pool keys ({time.time() - start:.0f}s)")
+    return {"query_keys": q, "pool_keys": pool_keys, "idf": np.log(n_pool / np.maximum(df, 1)),
+            "is_name_key": is_name_key, "pool_ids": pool_ids}
+
+
+def iter_candidates(s1, index, top_k=50, batch_size=1_000, yield_every=10_000):
+    """Like generate_candidates(ranking="all"), but yields the candidates in pieces of ~`yield_every` S1 entities,
+    so the full candidate table (87M rows on the test set) never has to be in memory at once."""
+    q, pool_keys, idf, is_name_key = index["query_keys"], index["pool_keys"], index["idf"], index["is_name_key"]
+    q = q.sort_values("s1_row")
+    starts = np.searchsorted(q["s1_row"].to_numpy(), np.arange(0, len(s1) + batch_size, batch_size))
+    kept = []
+    for i, first in enumerate(range(0, len(s1), batch_size)):
+        part = q.iloc[starts[i]:starts[i + 1]].merge(pool_keys, on="code")
+        if not part.empty:
+            part["w"] = idf[part["code"]]
+            part["w_name"] = np.where(is_name_key[part["code"]], part["w"], 0.0)
+            pair = part.groupby(["s1_row", "pool_row"]).agg(score_all=("w", "sum"), score_name=("w_name", "sum")).reset_index()
+            pair["score_addr"] = pair["score_all"] - pair["score_name"]
+            kept.append(pair[pair.groupby("s1_row")["score_all"].rank(method="first", ascending=False) <= top_k])
+        if (first + batch_size) % yield_every == 0 or first + batch_size >= len(s1):
+            if kept:
+                candidates = pd.concat(kept, ignore_index=True)
+                candidates["source1_entity_id"] = s1["entity_id"].to_numpy()[candidates["s1_row"]]
+                candidates["candidate_id"] = index["pool_ids"].to_numpy()[candidates["pool_row"]]
+                yield candidates
+            kept = []

@@ -11,6 +11,25 @@ import pandas as pd
 
 # ---------------------------------------------------------------- steps on lowercased raw text
 
+INDIAN_SCRIPTS = "[ऀ-ൿ]"   # Devanagari, Bengali, Gurmukhi, Gujarati, Oriya, Tamil, Telugu, Kannada, Malayalam
+
+
+def transliterate(text):
+    """Indian-script text -> Latin letters: 'सिल्वर डेवलपर्स' -> 'silvr devlprs' (Phase 12).
+
+    Uses the `anyascii` character table (ISC licence, offline, no external data). Only rows that contain
+    an Indian script are converted; everything else is left untouched.
+    """
+    from anyascii import anyascii
+
+    has_script = text.str.contains(INDIAN_SCRIPTS)
+    if not has_script.any():
+        return text
+    out = text.copy()
+    out[has_script] = [anyascii(value).lower() for value in text[has_script]]
+    return out
+
+
 TRADE_NAME_MARKER = r"^.+?\s(?:d\.?b\.?a\.?|a\.?k\.?a\.?|née|formerly known as|formerly|t/a|trading as):?\s+"
 
 
@@ -105,6 +124,7 @@ def strip_leading_zeros(text):
 # ---------------------------------------------------------------- the pipeline
 
 RAW_STEPS = {  # applied to lowercased raw text, before symbols are removed
+    "translit": transliterate,
     "trade_name": keep_real_name,
     "invisible": remove_invisible,
     "accents": strip_accents,

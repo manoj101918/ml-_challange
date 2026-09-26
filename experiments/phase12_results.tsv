@@ -1,0 +1,4 @@
+experiment	translit	training_entities	top_k	training_pairs	tuning_candidate_recall	validation_candidate_recall	threshold	tuning_F0.5_oof	validation_F0.5	validation_singletons	validation_precision	validation_recall	minutes
+E0	False	20000	50	998797	0.9392	0.9396	0.7	0.9324	0.9341	0.913	0.9786	0.8714	18.0
+E1	True	20000	50	998785	0.9392	0.9397	0.725	0.9373	0.9382	0.9287	0.9817	0.8751	37.2
+E2	True	60000	50	2996578	0.9395	0.9397	0.7	0.9407	0.9416	0.9339	0.9831	0.8808	42.0

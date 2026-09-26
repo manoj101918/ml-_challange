@@ -82,7 +82,10 @@ def add_features(pairs, name_vectorizer, addr_vectorizer):
     f["core_joined_ratio"] = pairwise(fuzz.ratio, core_s1.str.replace(" ", "", regex=False), core_c.str.replace(" ", "", regex=False))
     f["name_tfidf"] = tfidf_cosine(name_vectorizer, f["name_s1"], f["name_c"])
     f["name_len_diff"] = (f["name_s1"].str.len() - f["name_c"].str.len()).abs().astype("float32")
-    f["name_c_foreign_script"] = f["name_c"].str.contains("[ऀ-ൿ]").astype("int8")
+    if "name_c_foreign" in f:      # flag computed from the RAW name (after transliteration the normalized name is Latin)
+        f["name_c_foreign_script"] = f["name_c_foreign"].astype("int8")
+    else:
+        f["name_c_foreign_script"] = f["name_c"].str.contains("[ऀ-ൿ]").astype("int8")
 
     # --- legal form: same / conflicting / missing on one side
     forms_s1, forms_c = legal_forms(name_s1_words), legal_forms(name_c_words)

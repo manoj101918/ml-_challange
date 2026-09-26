@@ -36,6 +36,8 @@ jupyter notebook notebooks/01_data_exploration.ipynb
 - [x] Phase 9: logistic regression 0.889 / random forest 0.917 / **gradient boosting 0.934** validation F0.5 (`notebooks/09_model.ipynb`)
 - [x] Phase 10: decision rules — global threshold 0.70 stays best; one-owner conflict rule kept (`src/decision.py`, `notebooks/10_decision.ipynb`)
 - [x] Phase 11: error analysis on tuning entities — false merges / missed candidates / blocking misses, Indian-script names are the common cause (`notebooks/11_error_analysis.ipynb`)
+- [ ] Phase 12 (in progress): transliteration **0.938**, 60k training entities **0.9416** (`src/pipeline.py`, `experiments/phase12_run.py`); K=100 pending
+- [ ] Phase 13–15: scalable test run, validator, documentation — see `CLAUDE.md` for the hand-over plan
 
 ## Caches
 

@@ -13,11 +13,13 @@ and new countries (France) work without any change.
 Everything is vectorized pandas (no per-row Python loops) so it runs on millions of records.
 """
 
+import numpy as np
 import pandas as pd
 
 from src.preprocessing import LEGAL_WORDS, replace_words
 
 ALL_KEY_TYPES = ["nw", "aw", "nb", "ab", "nj"]
+NAME_KEY_TYPES = {"nw", "nb", "nj"}
 _REMOVE_LEGAL = {word: "" for word in LEGAL_WORDS}
 
 
@@ -55,5 +57,6 @@ def record_keys(names, addresses, countries, key_types=ALL_KEY_TYPES):
         if values.empty:              # e.g. a batch where every address is empty
             continue
         keys = countries.reindex(values.index) + f"|{key_type}|" + values.astype("str")
-        parts.append(pd.DataFrame({"row": values.index.to_numpy(), "key": keys.to_numpy()}))
+        parts.append(pd.DataFrame({"row": values.index.to_numpy(), "key": keys.to_numpy(),
+                                   "is_name": np.int8(key_type in NAME_KEY_TYPES)}))
     return pd.concat(parts, ignore_index=True)
