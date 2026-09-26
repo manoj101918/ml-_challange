@@ -43,7 +43,17 @@ EXPERIMENTS = {
     # E4: the candidate final configuration. Fast features (no TF-IDF, -0.001 but 3.3x faster, see phase12_ablation.tsv),
     # K = 100, 40k training entities (8 GB laptop: 60k x 100 candidates would not fit in memory)
     "E4": dict(name_steps=TRANSLIT_NAME, address_steps=TRANSLIT_ADDRESS, extra_train=20_000, top_k=100, use_tfidf=False),
+    # score-improvement round (run on Kaggle): E4 + stage-2 collective model + 150k training entities
+    "E5": dict(name_steps=TRANSLIT_NAME, address_steps=TRANSLIT_ADDRESS, extra_train=130_000, top_k=100, use_tfidf=False,
+               stage2=True),
+    # quick laptop check of the stage-2 wiring (small)
+    "E5_small": dict(name_steps=TRANSLIT_NAME, address_steps=TRANSLIT_ADDRESS, extra_train=0, top_k=100, use_tfidf=False,
+                     stage2=True),
 }
+HGB_STAGE2 = dict(max_iter=300, learning_rate=0.05, max_leaf_nodes=31, min_samples_leaf=40, l2_regularization=1.0,
+                  early_stopping=False, random_state=0)
+THRESHOLDS_STAGE2 = np.round(np.arange(0.30, 0.91, 0.025), 3)
+STAGE2_OUT = Path(__file__).resolve().parent.parent / "experiments" / "stage2_results.tsv"
 HGB = dict(max_iter=400, learning_rate=0.1, max_leaf_nodes=63, min_samples_leaf=50, l2_regularization=1.0,
            early_stopping=False, random_state=0)
 THRESHOLDS = np.round(np.arange(0.50, 0.91, 0.025), 3)
@@ -70,7 +80,7 @@ def macro(pairs, probabilities, threshold, truth_table):
     return score_report(to_submission(resolve_conflicts(chosen)), truth_table)
 
 
-def run(name, name_steps, address_steps, extra_train, top_k, use_tfidf=True):
+def run(name, name_steps, address_steps, extra_train, top_k, use_tfidf=True, stage2=False):
     start = time.time()
     log = lambda msg: print(f"[{name} {time.time() - start:5.0f}s] {msg}", flush=True)
     s1, truth = query_sets(extra_train)
@@ -103,10 +113,10 @@ def run(name, name_steps, address_steps, extra_train, top_k, use_tfidf=True):
     log(f"out-of-fold done, threshold {threshold}")
 
     model = HistGradientBoostingClassifier(**HGB).fit(X, y)
+    artifacts = {"model": model, "threshold": threshold, "vectorizers": vectorizers, "features": features,
+                 "name_steps": name_steps, "address_steps": address_steps, "top_k": top_k, "max_df": 1000}
     (CACHE_DIR / "models").mkdir(exist_ok=True)
-    joblib.dump({"model": model, "threshold": threshold, "vectorizers": vectorizers, "features": features,
-                 "name_steps": name_steps, "address_steps": address_steps, "top_k": top_k, "max_df": 1000},
-                CACHE_DIR / "models" / f"{name}.joblib")
+    joblib.dump(artifacts, CACHE_DIR / "models" / f"{name}.joblib")
     p_valid = model.predict_proba(valid[features].astype("float32"))[:, 1]
     report = macro(valid, p_valid, threshold, truth["validation"])
 
@@ -131,6 +141,55 @@ def run(name, name_steps, address_steps, extra_train, top_k, use_tfidf=True):
             writer.writeheader()
         writer.writerow(row)
     log(f"DONE {row}")
+
+    if stage2:
+        train_stage2(name, train.assign(p1=oof), valid.assign(p1=p_valid), truth, artifacts,
+                     name_steps, address_steps, report["macro_F0.5"], log)
+
+
+def train_stage2(name, train, valid, truth, artifacts, name_steps, address_steps, stage1_f05, log):
+    """Stage 2 on the OUT-OF-FOLD stage-1 probabilities of the training entities (see src/stage2.py)."""
+    from src.pipeline import normalized_pool
+    from src.stage2 import MIN_P1, feature_columns, stage2_features
+
+    train, valid = train[train["p1"] >= MIN_P1], valid[valid["p1"] >= MIN_P1]
+    ids = pd.concat([train["candidate_id"], valid["candidate_id"]]).unique().tolist()
+    text = pd.read_parquet(normalized_pool("train", name_steps, address_steps), columns=["entity_id", "name_norm", "addr_norm"],
+                           filters=[("entity_id", "in", ids)])
+    text = text.rename(columns={"entity_id": "candidate_id", "name_norm": "name_c", "addr_norm": "addr_c"})
+    s2_train = stage2_features(train.merge(text, on="candidate_id"))
+    s2_valid = stage2_features(valid.merge(text, on="candidate_id"))
+    columns = feature_columns(s2_train)
+    X, y = s2_train[columns].astype("float32"), s2_train["label"].to_numpy()
+    log(f"stage 2: {len(s2_train):,} training pairs, {len(columns)} features")
+
+    oof = np.zeros(len(s2_train))
+    for fit_idx, pred_idx in GroupKFold(n_splits=3).split(X, y, groups=s2_train["source1_entity_id"]):
+        oof[pred_idx] = HistGradientBoostingClassifier(**HGB_STAGE2).fit(X.iloc[fit_idx], y[fit_idx]).predict_proba(X.iloc[pred_idx])[:, 1]
+    scores = [macro(s2_train, oof, t, truth["tuning"])["macro_F0.5"] for t in THRESHOLDS_STAGE2]
+    threshold = float(THRESHOLDS_STAGE2[int(np.argmax(scores))])
+    model = HistGradientBoostingClassifier(**HGB_STAGE2).fit(X, y)
+    p2 = model.predict_proba(s2_valid[columns].astype("float32"))[:, 1]
+    report = macro(s2_valid, p2, threshold, truth["validation"])
+
+    artifacts.update({"stage2_model": model, "stage2_threshold": threshold, "stage2_features": columns})
+    joblib.dump(artifacts, CACHE_DIR / "models" / f"{name}.joblib")
+    chosen = resolve_conflicts(global_threshold(s2_valid.assign(probability=p2), threshold))
+    score_per_entity(to_submission(chosen), truth["validation"])[["source1_entity_id", "n_true", "n_pred", "n_correct", "f05"]].to_csv(
+        PER_ENTITY_DIR / f"{name}_stage2.tsv", sep="\t", index=False, lineterminator="\n")
+
+    row = {"experiment": name, "stage1_validation_F0.5": round(stage1_f05, 4), "stage2_threshold": threshold,
+           "stage2_tuning_F0.5_oof": round(max(scores), 4), "stage2_validation_F0.5": round(report["macro_F0.5"], 4),
+           "validation_singletons": round(report["F0.5 on singletons"], 4),
+           "validation_precision": round(report["pair precision"], 4), "validation_recall": round(report["pair recall"], 4),
+           "stage2_pairs_per_entity": round(len(s2_valid) / valid["source1_entity_id"].nunique(), 2)}
+    new_file = not STAGE2_OUT.exists()
+    with open(STAGE2_OUT, "a", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(row), delimiter="\t", lineterminator="\n")
+        if new_file:
+            writer.writeheader()
+        writer.writerow(row)
+    log(f"STAGE 2 DONE {row}")
 
 
 if __name__ == "__main__":

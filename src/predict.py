@@ -24,6 +24,7 @@ from src.blocking import build_index_hashed, iter_candidates
 from src.decision import global_threshold, resolve_conflicts
 from src.features import add_features
 from src.pipeline import CACHE_DIR, PROJECT_ROOT, normalized_pool, prepare_queries
+from src.stage2 import stage2_features
 from src.submission import write_id_list_file
 
 KEEP_PROBABILITY = 0.30      # scored pairs below this are dropped right away (far below the ~0.7 threshold)
@@ -54,12 +55,22 @@ def score_country(queries, pool_path, n_pool, artifacts, country, candidate_file
         pairs = pairs.merge(q_text, on="source1_entity_id")
         pairs = add_features(pairs, *(artifacts["vectorizers"] or (None, None)))
         pairs["probability"] = artifacts["model"].predict_proba(pairs[artifacts["features"]].astype("float32"))[:, 1]
+        n_chunk = pairs["source1_entity_id"].nunique()
+        if "stage2_model" in artifacts:
+            # stage 1 acts as a filter (p1 >= MIN_P1); the final model = stage 2 scores only those pairs,
+            # so candidate_pairs.tsv lists exactly the pairs the final model scored
+            pairs = stage2_features(pairs.rename(columns={"probability": "p1"}))
+            if len(pairs):
+                pairs["probability"] = artifacts["stage2_model"].predict_proba(
+                    pairs[artifacts["stage2_features"]].astype("float32"))[:, 1]
+            else:
+                pairs["probability"] = pd.Series(dtype="float64")
 
         lists = pairs.groupby("source1_entity_id")["candidate_id"].agg(",".join)
         candidate_file.write("".join(f"{s1_id}\t{ids}\n" for s1_id, ids in lists.items()))
         written.append(lists.index.to_numpy())
         scored.append(pairs.loc[pairs["probability"] >= KEEP_PROBABILITY, ["source1_entity_id", "candidate_id", "probability"]])
-        n_done += pairs["source1_entity_id"].nunique()
+        n_done += n_chunk
         log(f"  {country}: {n_done:,}/{len(q):,} entities scored ({time.time() - start:.0f}s)")
         del pairs, text
         gc.collect()
@@ -107,7 +118,8 @@ def predict(split, s1, artifacts, candidate_path, log=print):
     log(f"candidate file written ({len(without_candidates):,} entities without candidates)")
     scored = pd.concat(scored, ignore_index=True)
 
-    matches = resolve_conflicts(global_threshold(scored, artifacts["threshold"]))
+    threshold = artifacts.get("stage2_threshold", artifacts["threshold"])
+    matches = resolve_conflicts(global_threshold(scored, threshold))
     match_lists = matches.groupby("source1_entity_id")["candidate_id"].agg(",".join)
 
     all_ids = s1["entity_id"]
