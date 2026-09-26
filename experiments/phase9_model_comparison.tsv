@@ -1,0 +1,5 @@
+model	oof AUC	threshold (chosen on tuning)	tuning F0.5 (out-of-fold)	validation AUC	validation F0.5	validation F0.5 matched entities	validation F0.5 singletons	pair precision	pair recall	seconds
+logistic regression	0.9973	0.65	0.8874	0.9973	0.8886	0.8928	0.82	0.9537	0.811	53.0
+random forest	0.9986	0.55	0.9135	0.9987	0.9168	0.9188	0.8843	0.9687	0.8476	116.0
+gradient boosting	0.9993	0.7	0.9324	0.9994	0.934	0.9353	0.913	0.9785	0.8714	204.0
+Jaccard rule (Phase 7)		0.6			0.7058					

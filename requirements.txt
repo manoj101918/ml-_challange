@@ -5,3 +5,4 @@ pyarrow==23.0.1
 matplotlib==3.11.0
 jupyter
 psutil
+rapidfuzz==3.14.6

@@ -1,0 +1,2 @@
+blocking	scorer	tuning_candidate_recall	validation_candidate_recall	threshold	tuning_F0.5	validation_F0.5	validation_precision	validation_recall	candidate_pairs	seconds
+5 key types, max_df=1000, ranking=all, K=50	Jaccard mean (Phase 6 rule)	0.9392	0.9396	0.6	0.7074	0.7058	0.7891	0.6704	1997854	74

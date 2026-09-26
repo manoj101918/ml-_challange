@@ -1,0 +1,16 @@
+experiment	name_steps	address_steps	tuning_candidate_recall	validation_candidate_recall	threshold	tuning_F0.5	validation_F0.5	validation_precision	validation_recall	candidate_pairs	seconds
+baseline			0.5797	0.5878	0.45	0.5233	0.5278	0.7381	0.5059	1669877	227
+accents	accents	accents	0.5797	0.5875	0.55	0.5281	0.5282	0.8343	0.441	1669089	237
+invisible	invisible	invisible	0.5797	0.5878	0.45	0.5233	0.5278	0.7381	0.5059	1669877	231
+trade_name	trade_name		0.5796	0.5874	0.45	0.5227	0.5274	0.7365	0.5057	1669877	304
+web	web		0.5797	0.5878	0.45	0.5235	0.5278	0.7376	0.5065	1669877	226
+dots	dots		0.5786	0.5878	0.55	0.524	0.5252	0.8355	0.4312	1669863	210
+ampersand	ampersand		0.5797	0.5878	0.45	0.5234	0.5276	0.7373	0.5069	1669877	244
+legal_canonical	legal_canonical		0.5797	0.5873	0.55	0.5223	0.5241	0.8227	0.4357	1669877	248
+legal_remove	legal_remove		0.579	0.5869	0.55	0.5134	0.5166	0.819	0.4283	1669927	270
+address_abbrev		address_abbrev	0.5798	0.5867	0.55	0.5305	0.5307	0.8245	0.4539	1669954	265
+null		null	0.5794	0.5879	0.45	0.5235	0.5277	0.738	0.5063	1669877	305
+zeros		zeros	0.58	0.5887	0.45	0.5245	0.5267	0.7376	0.5083	1665420	226
+combo_0_baseline			0.5797	0.5878	0.45	0.5233	0.5278	0.7381	0.5059	1669877	227
+combo_1_helped	accents	accents+address_abbrev	0.581	0.5895	0.55	0.5357	0.5362	0.8244	0.4661	1669166	302
+combo_2_helped_plus_neutral	trade_name+invisible+accents+web	invisible+accents+address_abbrev+null+zeros	0.5828	0.5895	0.55	0.5377	0.5378	0.8235	0.4699	1664711	328

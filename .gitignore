@@ -10,3 +10,10 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 .DS_Store
+
+# Local caches (large, regenerable)
+cache/
+
+# Organizer-provided materials (kept locally, not republished)
+*_problem_statement.pdf
+utils/
