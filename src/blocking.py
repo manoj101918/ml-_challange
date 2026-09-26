@@ -148,10 +148,13 @@ def iter_candidates(s1, index, top_k=50, batch_size=5_000, yield_every=10_000):
     no pandas merge, which would re-hash the whole pool-key table for every batch.
     """
     idf, is_name_key = index["idf"], index["is_name_key"]
-    pool_codes = index["pool_keys"]["code"].to_numpy()
+    pool_keys = index.pop("pool_keys")            # the sorted arrays below replace it -> free its memory
+    pool_codes = pool_keys["code"].to_numpy()
     order = np.argsort(pool_codes, kind="stable")
-    pool_rows_sorted = index["pool_keys"]["pool_row"].to_numpy()[order]
+    pool_rows_sorted = pool_keys["pool_row"].to_numpy()[order]
     offsets = np.searchsorted(pool_codes[order], np.arange(len(idf) + 1))     # rows of code c: offsets[c]:offsets[c+1]
+    del pool_keys, pool_codes, order
+    gc.collect()
 
     q = index["query_keys"].sort_values("s1_row")
     q_rows, q_codes = q["s1_row"].to_numpy(), q["code"].to_numpy()

@@ -20,3 +20,6 @@ utils/
 
 # Built submission zips
 submission/
+
+# Portable transfer zip
+portable/

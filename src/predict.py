@@ -29,7 +29,8 @@ from src.submission import write_id_list_file
 KEEP_PROBABILITY = 0.30      # scored pairs below this are dropped right away (far below the ~0.7 threshold)
 
 
-def score_country(queries, pool_path, n_pool, artifacts, country, candidate_file, chunk_rows=250_000, log=print):
+def score_country(queries, pool_path, n_pool, artifacts, country, candidate_file, chunk_rows=250_000, yield_every=5_000,
+                  log=print):
     """Probabilities for the S1 entities of one country. Candidate lists are written straight to `candidate_file`
     (on the test set they are ~2 GB of text, too big to keep in memory). Returns (scored pairs, IDs written)."""
     start = time.time()
@@ -43,7 +44,7 @@ def score_country(queries, pool_path, n_pool, artifacts, country, candidate_file
 
     scored, written = [], []
     n_done = 0
-    for candidates in iter_candidates(q, index, top_k=artifacts["top_k"]):
+    for candidates in iter_candidates(q, index, top_k=artifacts["top_k"], yield_every=yield_every):
         text = pool.take(candidates["pool_row"].to_numpy()).to_pandas()
         pairs = candidates[["source1_entity_id", "s1_row", "score_all", "score_name", "score_addr"]].reset_index(drop=True)
         pairs["candidate_id"] = text["entity_id"].to_numpy()
@@ -74,13 +75,33 @@ def predict(split, s1, artifacts, candidate_path, log=print):
     pool_path = normalized_pool(split, artifacts["name_steps"], artifacts["address_steps"], log=log)
     n_pool = pq.ParquetFile(pool_path).metadata.num_rows
 
+    # checkpoints: every finished country is saved, so a stopped run resumes where it left off
+    parts = CACHE_DIR / f"predict_parts_{split}_{Path(candidate_path).stem}"
+    parts.mkdir(parents=True, exist_ok=True)
     scored, written = [], []
+    for country in sorted(queries["country"].unique()):              # open set of countries - nothing hard-coded
+        name = "".join(ch if ch.isalnum() else "_" for ch in country)
+        done, part_scored = parts / f"{name}.done", parts / f"{name}_scored.parquet"
+        part_ids, part_candidates = parts / f"{name}_ids.parquet", parts / f"{name}_candidates.tsv"
+        if done.exists():
+            log(f"  {country}: already done (checkpoint), skipped")
+        else:
+            with open(part_candidates, "w", encoding="utf-8", newline="\n") as candidate_file:
+                pairs, ids = score_country(queries, pool_path, n_pool, artifacts, country, candidate_file, log=log)
+            pairs.to_parquet(part_scored, index=False)
+            pd.DataFrame({"source1_entity_id": ids}).to_parquet(part_ids, index=False)
+            done.touch()
+            del pairs, ids
+            gc.collect()
+        scored.append(pd.read_parquet(part_scored))
+        written.append(pd.read_parquet(part_ids)["source1_entity_id"].to_numpy())
+
     with open(candidate_path, "w", encoding="utf-8", newline="\n") as candidate_file:
         candidate_file.write("source1_entity_id\tcandidate_entity_ids\n")
-        for country in sorted(queries["country"].unique()):          # open set of countries - nothing hard-coded
-            pairs, ids = score_country(queries, pool_path, n_pool, artifacts, country, candidate_file, log=log)
-            scored.append(pairs)
-            written.append(ids)
+        for part in sorted(parts.glob("*_candidates.tsv")):
+            with open(part, encoding="utf-8", newline="") as f:
+                for block in iter(lambda: f.read(1 << 24), ""):
+                    candidate_file.write(block)
         without_candidates = s1.loc[~s1["entity_id"].isin(np.concatenate(written)), "entity_id"]
         candidate_file.write("".join(f"{s1_id}\t\n" for s1_id in without_candidates))
     log(f"candidate file written ({len(without_candidates):,} entities without candidates)")
