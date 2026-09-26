@@ -32,6 +32,7 @@ from src.evaluation import score_per_entity, score_report
 from src.features import FAST_FEATURE_COLUMNS, FEATURE_COLUMNS
 from src.pipeline import CACHE_DIR, label_pairs, prepare_queries, run_blocking_and_features
 from src.preprocessing import ADDRESS_STEPS, NAME_STEPS
+from src.progress import Progress
 from src.rule_experiment import TRAIN_DIR, load_query_sets
 from src.splits import make_validation_split
 
@@ -97,6 +98,15 @@ def macro(pairs, probabilities, threshold, truth_table):
     return score_report(to_submission(resolve_conflicts(chosen)), truth_table)
 
 
+def threshold_scores(pairs, probabilities, thresholds, truth_table, log):
+    progress = Progress(len(thresholds), "threshold search", log)
+    scores = []
+    for t in thresholds:
+        scores.append(macro(pairs, probabilities, t, truth_table)["macro_F0.5"])
+        progress.update()
+    return scores
+
+
 def run(name, name_steps, address_steps, extra_train, top_k, use_tfidf=True, stage2=False, learner="hgb"):
     start = time.time()
     log = lambda msg: print(f"[{name} {time.time() - start:5.0f}s] {msg}", flush=True)
@@ -121,16 +131,19 @@ def run(name, name_steps, address_steps, extra_train, top_k, use_tfidf=True, sta
     del pairs
     X, y = train[features].astype("float32"), train["label"].to_numpy()
 
+    log(f"training {learner} on {len(train):,} pairs ({train['source1_entity_id'].nunique():,} entities)")
     oof = np.zeros(len(train))
+    fits = Progress(4, f"model fits ({learner}, 3 folds + final; the final fit is ~1.5x a fold)", log, every=0)
     for fit_idx, pred_idx in GroupKFold(n_splits=3).split(X, y, groups=train["source1_entity_id"]):
         model = make_model(learner).fit(X.iloc[fit_idx], y[fit_idx])
         oof[pred_idx] = model.predict_proba(X.iloc[pred_idx])[:, 1]
-        log(f"  fold fitted ({learner})")
-    tuning_scores = [macro(train, oof, t, truth["tuning"])["macro_F0.5"] for t in THRESHOLDS]
+        fits.update()
+    tuning_scores = threshold_scores(train, oof, THRESHOLDS, truth["tuning"], log)
     threshold = float(THRESHOLDS[int(np.argmax(tuning_scores))])
     log(f"out-of-fold done, threshold {threshold}")
 
     model = make_model(learner).fit(X, y)
+    fits.update()
     if learner == "xgb":
         model.set_params(device="cpu")        # the saved model predicts on any machine (GPU not required)
     artifacts = {"model": model, "threshold": threshold, "vectorizers": vectorizers, "features": features,
@@ -177,6 +190,7 @@ def train_stage2(name, train, valid, truth, artifacts, name_steps, address_steps
     text = pd.read_parquet(normalized_pool("train", name_steps, address_steps), columns=["entity_id", "name_norm", "addr_norm"],
                            filters=[("entity_id", "in", ids)])
     text = text.rename(columns={"entity_id": "candidate_id", "name_norm": "name_c", "addr_norm": "addr_c"})
+    log(f"stage 2: features for {len(train) + len(valid):,} pairs with p1 >= {MIN_P1}")
     s2_train = stage2_features(train.merge(text, on="candidate_id"))
     s2_valid = stage2_features(valid.merge(text, on="candidate_id"))
     columns = feature_columns(s2_train)
@@ -184,11 +198,14 @@ def train_stage2(name, train, valid, truth, artifacts, name_steps, address_steps
     log(f"stage 2: {len(s2_train):,} training pairs, {len(columns)} features")
 
     oof = np.zeros(len(s2_train))
+    fits = Progress(4, "stage-2 fits (3 folds + final)", log, every=0)
     for fit_idx, pred_idx in GroupKFold(n_splits=3).split(X, y, groups=s2_train["source1_entity_id"]):
         oof[pred_idx] = HistGradientBoostingClassifier(**HGB_STAGE2).fit(X.iloc[fit_idx], y[fit_idx]).predict_proba(X.iloc[pred_idx])[:, 1]
-    scores = [macro(s2_train, oof, t, truth["tuning"])["macro_F0.5"] for t in THRESHOLDS_STAGE2]
+        fits.update()
+    scores = threshold_scores(s2_train, oof, THRESHOLDS_STAGE2, truth["tuning"], log)
     threshold = float(THRESHOLDS_STAGE2[int(np.argmax(scores))])
     model = HistGradientBoostingClassifier(**HGB_STAGE2).fit(X, y)
+    fits.update()
     p2 = model.predict_proba(s2_valid[columns].astype("float32"))[:, 1]
     report = macro(s2_valid, p2, threshold, truth["validation"])
 

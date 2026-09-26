@@ -19,6 +19,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 
 from src.blocking_keys import ALL_KEY_TYPES, record_keys
+from src.progress import Progress
 
 NAME_KEY_TYPES = {"nw", "nb", "nj"}
 
@@ -37,7 +38,9 @@ def build_index(s1, pool_path, max_df, key_types=ALL_KEY_TYPES, chunk_rows=1_000
 
     df = np.zeros(len(vocabulary), dtype=np.int64)
     pool_ids, pool_keys, offset = [], [], 0
-    for batch in pq.ParquetFile(pool_path).iter_batches(batch_size=chunk_rows, columns=["entity_id", "country", "name_norm", "addr_norm"]):
+    pool_file = pq.ParquetFile(pool_path)
+    progress = Progress(-(-pool_file.metadata.num_rows // chunk_rows), "index: pool chunks", log)
+    for batch in pool_file.iter_batches(batch_size=chunk_rows, columns=["entity_id", "country", "name_norm", "addr_norm"]):
         chunk = batch.to_pandas()
         pool_ids.append(chunk["entity_id"])
         k = record_keys(chunk["name_norm"], chunk["addr_norm"], chunk["country"], key_types)
@@ -49,6 +52,7 @@ def build_index(s1, pool_path, max_df, key_types=ALL_KEY_TYPES, chunk_rows=1_000
         df += chunk_counts
         pool_keys.append(k[chunk_counts[k["code"]] <= max_df])   # too common in this chunk alone -> too common overall
         offset += len(chunk)
+        progress.update()
     pool_ids = pd.concat(pool_ids, ignore_index=True)
     pool_keys = pd.concat(pool_keys, ignore_index=True)
     pool_keys = pool_keys[df[pool_keys["code"]] <= max_df]
@@ -64,10 +68,11 @@ def build_index(s1, pool_path, max_df, key_types=ALL_KEY_TYPES, chunk_rows=1_000
     }
 
 
-def generate_candidates(s1, index, top_k=50, ranking="all", batch_size=1_000):
+def generate_candidates(s1, index, top_k=50, ranking="all", batch_size=1_000, log=print):
     """Candidate table: source1_entity_id, candidate_id, s1_row, pool_row, score_all, score_name, score_addr."""
     q, pool_keys, idf, is_name_key = index["query_keys"], index["pool_keys"], index["idf"], index["is_name_key"]
     kept = []
+    progress = Progress(-(-len(s1) // batch_size), "candidates: query batches", log)
     for b in range(0, len(s1), batch_size):
         part = q[(q["s1_row"] >= b) & (q["s1_row"] < b + batch_size)].merge(pool_keys, on="code")
         part["w"] = idf[part["code"]]
@@ -80,6 +85,7 @@ def generate_candidates(s1, index, top_k=50, ranking="all", batch_size=1_000):
             keep = (pair.groupby("s1_row")["score_name"].rank(method="first", ascending=False) <= top_k // 2) | \
                    (pair.groupby("s1_row")["score_addr"].rank(method="first", ascending=False) <= top_k // 2)
         kept.append(pair[keep])
+        progress.update()
     candidates = pd.concat(kept, ignore_index=True)
     candidates["source1_entity_id"] = s1["entity_id"].to_numpy()[candidates["s1_row"]]
     candidates["candidate_id"] = index["pool_ids"].to_numpy()[candidates["pool_row"]]

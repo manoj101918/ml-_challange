@@ -24,6 +24,7 @@ from src.blocking import build_index_hashed, iter_candidates
 from src.decision import global_threshold, resolve_conflicts
 from src.features import add_features
 from src.pipeline import CACHE_DIR, PROJECT_ROOT, normalized_pool, prepare_queries
+from src.progress import Progress
 from src.stage2 import stage2_features
 from src.submission import write_id_list_file
 
@@ -31,7 +32,7 @@ KEEP_PROBABILITY = 0.30      # scored pairs below this are dropped right away (f
 
 
 def score_country(queries, pool_path, n_pool, artifacts, country, candidate_file, chunk_rows=250_000, yield_every=5_000,
-                  log=print):
+                  log=print, overall=None):
     """Probabilities for the S1 entities of one country. Candidate lists are written straight to `candidate_file`
     (on the test set they are ~2 GB of text, too big to keep in memory). Returns (scored pairs, IDs written)."""
     start = time.time()
@@ -72,6 +73,8 @@ def score_country(queries, pool_path, n_pool, artifacts, country, candidate_file
         scored.append(pairs.loc[pairs["probability"] >= KEEP_PROBABILITY, ["source1_entity_id", "candidate_id", "probability"]])
         n_done += n_chunk
         log(f"  {country}: {n_done:,}/{len(q):,} entities scored ({time.time() - start:.0f}s)")
+        if overall is not None:
+            overall.update(n_chunk)
         del pairs, text
         gc.collect()
     del index, pool
@@ -90,15 +93,21 @@ def predict(split, s1, artifacts, candidate_path, log=print):
     parts = CACHE_DIR / f"predict_parts_{split}_{Path(candidate_path).stem}"
     parts.mkdir(parents=True, exist_ok=True)
     scored, written = [], []
-    for country in sorted(queries["country"].unique()):              # open set of countries - nothing hard-coded
-        name = "".join(ch if ch.isalnum() else "_" for ch in country)
+    countries = sorted(queries["country"].unique())                  # open set of countries - nothing hard-coded
+    file_name = lambda country: "".join(ch if ch.isalnum() else "_" for ch in country)
+    to_do = [c for c in countries if not (parts / f"{file_name(c)}.done").exists()]
+    # ETA over ALL remaining countries (the first estimate includes each country's index build, so it settles after a while)
+    overall = Progress(int(queries["country"].isin(to_do).sum()), "ALL COUNTRIES: entities", log, every=300)
+    for country in countries:
+        name = file_name(country)
         done, part_scored = parts / f"{name}.done", parts / f"{name}_scored.parquet"
         part_ids, part_candidates = parts / f"{name}_ids.parquet", parts / f"{name}_candidates.tsv"
         if done.exists():
             log(f"  {country}: already done (checkpoint), skipped")
         else:
             with open(part_candidates, "w", encoding="utf-8", newline="\n") as candidate_file:
-                pairs, ids = score_country(queries, pool_path, n_pool, artifacts, country, candidate_file, log=log)
+                pairs, ids = score_country(queries, pool_path, n_pool, artifacts, country, candidate_file, log=log,
+                                           overall=overall)
             pairs.to_parquet(part_scored, index=False)
             pd.DataFrame({"source1_entity_id": ids}).to_parquet(part_ids, index=False)
             done.touch()

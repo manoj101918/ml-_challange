@@ -16,6 +16,7 @@ import pyarrow.parquet as pq
 from src.blocking import build_index, generate_candidates
 from src.features import FAST_FEATURE_COLUMNS, FEATURE_COLUMNS, add_features, fit_tfidf
 from src.preprocessing import INDIAN_SCRIPTS, normalize
+from src.progress import Progress
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CACHE_DIR = PROJECT_ROOT / "cache"
@@ -74,16 +75,18 @@ def pair_features(candidates, queries, pool_path, vectorizers, chunk_entities=10
         columns={"entity_id": "source1_entity_id", "name_norm": "name_s1", "addr_norm": "addr_s1"})
 
     parts = []
-    for first in range(0, candidates["s1_row"].max() + 1, chunk_entities):
+    firsts = range(0, candidates["s1_row"].max() + 1, chunk_entities)
+    progress = Progress(len(firsts), "features: entity chunks", log)
+    for first in firsts:
         chunk = candidates[(candidates["s1_row"] >= first) & (candidates["s1_row"] < first + chunk_entities)]
-        if chunk.empty:
-            continue
-        chunk = (chunk[["source1_entity_id", "candidate_id", "s1_row", "score_all", "score_name", "score_addr"]]
-                 .merge(q, on="source1_entity_id").merge(text, on="candidate_id"))
-        chunk = add_features(chunk, *(vectorizers or (None, None)))
-        columns = FEATURE_COLUMNS if vectorizers else FAST_FEATURE_COLUMNS
-        parts.append(chunk[["source1_entity_id", "candidate_id"] + columns])
-        gc.collect()
+        if not chunk.empty:
+            chunk = (chunk[["source1_entity_id", "candidate_id", "s1_row", "score_all", "score_name", "score_addr"]]
+                     .merge(q, on="source1_entity_id").merge(text, on="candidate_id"))
+            chunk = add_features(chunk, *(vectorizers or (None, None)))
+            columns = FEATURE_COLUMNS if vectorizers else FAST_FEATURE_COLUMNS
+            parts.append(chunk[["source1_entity_id", "candidate_id"] + columns])
+            gc.collect()
+        progress.update()
     log(f"  features for {sum(len(p) for p in parts):,} pairs ({time.time() - start:.0f}s)")
     return pd.concat(parts, ignore_index=True)
 
@@ -99,7 +102,7 @@ def label_pairs(pairs, truth_tables):
 def run_blocking_and_features(queries, split, name_steps, address_steps, top_k=50, max_df=1000, use_tfidf=True, log=print):
     pool_path = normalized_pool(split, name_steps, address_steps, log=log)
     index = build_index(queries, pool_path, max_df=max_df, chunk_rows=250_000, log=log)   # small chunks: ~8 GB laptop
-    candidates = generate_candidates(queries, index, top_k=top_k, ranking="all")
+    candidates = generate_candidates(queries, index, top_k=top_k, ranking="all", log=log)
     del index
     gc.collect()
     log(f"  {len(candidates):,} candidates")
