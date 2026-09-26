@@ -11,7 +11,7 @@ A classic, fully offline entity-resolution pipeline: **text normalization** (inc
 letters) → **multi-key blocking** on rare word, word-pair and joined-name keys → **32 hand-designed similarity features** →
 a **gradient-boosted tree classifier** (scikit-learn `HistGradientBoostingClassifier`) → a **precision-oriented decision rule**
 (one global probability threshold chosen on out-of-fold training predictions, plus a "one owner per record" constraint).
-On our held-out validation entities it reaches **macro F0.5 = 0.942** (pair precision 0.983, pair recall 0.881).
+On our held-out validation entities it reaches **macro F0.5 = 0.942** (pair precision 0.983, pair recall 0.881); the public leaderboard score on the test set is **0.935**.
 
 ---
 
@@ -92,7 +92,7 @@ thresholds were tested and did not beat the global threshold. The model's probab
 
 ## 5. Results & Error Analysis
 
-- **F_0.5 Score (macro):** **0.9421** on the 20,000-entity validation sample (pair precision 0.9825, pair recall 0.8814,
+- **F_0.5 Score (macro):** **public leaderboard 0.935** (test set, submitted 26 Sep 2026); **0.9421** on our 20,000-entity validation sample (pair precision 0.9825, pair recall 0.8814,
   singletons 0.930, entities with matches 0.943). Out-of-fold score on training entities: 0.9416.
 
   | step | validation macro F0.5 |

@@ -105,6 +105,7 @@ Rejected (measured, hurt or no gain): legal-word canonicalization/removal, dot-j
 ## FINAL STATUS (2026-09-26): all phases complete
 - Test prediction ran on Kaggle (notebook `manojpabbineedi/notebook2390db6f21`, portable zip `portable/amazon_er_test_run.zip`):
   172,769,341 candidate pairs, 5,380,195 predicted pairs, official validator PASS. Outputs are in `output/` (gitignored).
+- **Public leaderboard F0.5 = 0.935** (26 Sep 2026, 20:04 IST) vs 0.9421 on validation.
 - Phase 14 checks: `experiments/phase14_checks.py` → `experiments/phase14_checks.txt` (test behaves like validation; France fine).
 - Team **TechCrafters**: Manoj Kumar Pabbineedi, Pilla Prudhvi Lakshman, Marpu Giri Prasad, Tandasa Mourya.
 - Final package: `python -m src.package_submission --team TechCrafters` → `submission/TechCrafters_submission.zip`.
