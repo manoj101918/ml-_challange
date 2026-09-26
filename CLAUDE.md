@@ -70,7 +70,7 @@ normalize (src/preprocessing.py: NAME_STEPS / ADDRESS_STEPS + "translit")
 | + gradient boosting on 34 features | 0.934 |
 | + transliteration of Indian scripts (E1) | 0.938 |
 | + 60k training entities instead of 20k (E2) | **0.9416** |
-| E3 = E1 + K=100 candidates | was running at hand-over; re-run `python experiments/phase12_run.py E3` if its row is missing in `experiments/phase12_results.tsv` |
+| E1 + K=100 candidates instead of 50 (E3; candidate recall 0.940 → 0.952) | **0.9415** |
 
 Rejected (measured, hurt or no gain): legal-word canonicalization/removal, dot-joining, relative/expected-F0.5 decision rules.
 
@@ -85,7 +85,9 @@ Rejected (measured, hurt or no gain): legal-word canonicalization/removal, dot-j
   and experiments can run in parallel.
 
 ## Next steps (Phase 12 → 15)
-1. **E3** result (K=100 vs E1). Keep K=100 only if it beats E1 significantly (paired bootstrap as in notebooks 06/10).
+1. E2 (more training data) and E3 (K=100) each gave a significant +0.003 over E1 (paired bootstrap CI above 0).
+   Next experiment: **E4 = both together** (translit + 60k+ training entities + K=100); expected ≈ 0.944–0.945.
+   K=100 doubles the pairs to score on the test set (~173M), so the feature speed-up (step 2) matters even more.
 2. **Speed up features**: E2 needed ~13 min per 4M pairs → the test set (~87M pairs at K=50) would take hours.
    Profile `src/features.add_features`; vectorize the Python loops (jaccard, legal forms, numbers) and/or parallelize chunks;
    optional cheap pre-filter stage (then `candidate_pairs.tsv` = the filtered set the final model scores).

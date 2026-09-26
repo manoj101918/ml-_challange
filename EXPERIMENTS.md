@@ -6,6 +6,7 @@ Change one thing at a time.
 
 | # | Date | Blocking | Candidate recall | Features | Model | Threshold | Small-val F0.5 | Notes |
 |---|---|---|---|---|---|---|---|---|
+| 12 | 2026-09-26 | #3 with **K = 100** | **0.952** | #10 | HGB, 20k training entities (4.0M pairs) | 0.725 | **0.9415** | phase12_run.py E3; +0.0033 vs E1, 95% CI [+0.0023, +0.0044]; twice the pairs to score; not yet combined with #11 |
 | 11 | 2026-09-26 | #3 | 0.940 | #10 | HGB, **60k training entities** (3.0M pairs) | 0.70 | **0.9416** | phase12_run.py E2; +0.0034 vs E1, 95% CI [+0.0024, +0.0044]; singletons 0.934; P 0.983 / R 0.881 |
 | 10 | 2026-09-26 | #3 | 0.940 | #6 + **transliteration** of Indian scripts (anyascii) in names and addresses | HGB, 20k training entities | 0.725 | **0.9382** | phase12_run.py E1; +0.0041 vs E0, paired-bootstrap 95% CI [+0.0030, +0.0054]; blocking recall unchanged, gain from features; singletons 0.929 |
 | 9 | 2026-09-26 | #3 | 0.940 | #6 | HGB via new src/pipeline.py | 0.70 | 0.9341 | phase12_run.py E0: reproduces #7 exactly |
