@@ -6,6 +6,8 @@ Change one thing at a time.
 
 | # | Date | Blocking | Candidate recall | Features | Model | Threshold | Small-val F0.5 | Notes |
 |---|---|---|---|---|---|---|---|---|
+| 14 | 2026-09-26 | #3 with K = 100 | 0.952 | #10 **without the 2 TF-IDF features** (3.3x faster) | HGB, 40k training entities (4.0M pairs) | 0.725 | **0.9421** | phase12_run.py E4 = candidate final config, model saved to cache/models/E4.joblib; +0.0039 vs E1 (CI [0.0028, 0.0050]); vs E2/E3 +0.0005 (CI incl. 0) |
+| 13 | 2026-09-26 | #3 | 0.940 | #6 without name_tfidf / addr_tfidf | HGB, 20k | 0.70 | 0.9330 | phase12_ablation.py: −0.0011 vs #6 (0.9341) — TF-IDF is 64% of feature time, so dropped for speed |
 | 12 | 2026-09-26 | #3 with **K = 100** | **0.952** | #10 | HGB, 20k training entities (4.0M pairs) | 0.725 | **0.9415** | phase12_run.py E3; +0.0033 vs E1, 95% CI [+0.0023, +0.0044]; twice the pairs to score; not yet combined with #11 |
 | 11 | 2026-09-26 | #3 | 0.940 | #10 | HGB, **60k training entities** (3.0M pairs) | 0.70 | **0.9416** | phase12_run.py E2; +0.0034 vs E1, 95% CI [+0.0024, +0.0044]; singletons 0.934; P 0.983 / R 0.881 |
 | 10 | 2026-09-26 | #3 | 0.940 | #6 + **transliteration** of Indian scripts (anyascii) in names and addresses | HGB, 20k training entities | 0.725 | **0.9382** | phase12_run.py E1; +0.0041 vs E0, paired-bootstrap 95% CI [+0.0030, +0.0054]; blocking recall unchanged, gain from features; singletons 0.929 |

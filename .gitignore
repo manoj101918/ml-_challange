@@ -17,3 +17,6 @@ cache/
 # Organizer-provided materials (kept locally, not republished)
 *_problem_statement.pdf
 utils/
+
+# Built submission zips
+submission/

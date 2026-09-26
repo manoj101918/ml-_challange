@@ -71,6 +71,7 @@ normalize (src/preprocessing.py: NAME_STEPS / ADDRESS_STEPS + "translit")
 | + transliteration of Indian scripts (E1) | 0.938 |
 | + 60k training entities instead of 20k (E2) | **0.9416** |
 | E1 + K=100 candidates instead of 50 (E3; candidate recall 0.940 → 0.952) | **0.9415** |
+| **E4 = final config**: translit + K=100 + 40k training entities + fast features (no TF-IDF) | **0.9421** |
 
 Rejected (measured, hurt or no gain): legal-word canonicalization/removal, dot-joining, relative/expected-F0.5 decision rules.
 
@@ -83,6 +84,23 @@ Rejected (measured, hurt or no gain): legal-word canonicalization/removal, dot-j
 - One experiment per fresh Python process (memory fragmentation). On the 8 GB laptop only ~1 GB was free → heavy swapping.
   On a bigger machine raise `chunk_rows` in `src/pipeline.run_blocking_and_features` (250k → 1M) and `chunk_entities` (10k → 50k),
   and experiments can run in parallel.
+
+## Status at 2026-09-26 (continued on the same laptop)
+- **Final model = E4**, saved in `cache/models/E4.joblib` (model, threshold 0.725, feature list, normalization steps, K=100, max_df=1000).
+  TF-IDF features dropped: −0.001 F0.5 but 3.3× faster features (`experiments/phase12_ablation.tsv`); `src.features.FAST_FEATURE_COLUMNS`.
+- **`src/predict.py`** = scalable prediction (one country at a time, hashed keys, streamed candidates, candidate file written
+  incrementally — ~2 GB on test at K=100). Verified: `python -m src.predict --model cache/models/E4.joblib --split small_validation`
+  reproduces E4 exactly (0.9421, candidate recall 0.9522).
+- Training code moved to **`src/train.py`** (`python -m src.train E4`); `experiments/phase12_run.py` is a thin wrapper.
+- `src/blocking.iter_candidates` uses a sorted-offset (CSR) lookup instead of a pandas merge per batch — 22× faster on the
+  test set (~52 s per 10k entities on the laptop, ~2.5 h for the whole test set); verified identical to the merge version.
+- `cache/models/E4.joblib` is NOT in git (cache/ is ignored): copy it to a new machine or retrain with `python -m src.train E4`
+  (needs the same scikit-learn version, 1.9.0).
+- Submission packaging: `submission_README.md` (becomes code/business_entity_resolution/README.md), filled `Documentation_template.md`
+  (team name/members and the test candidate count `[TEST_CANDIDATES]` still to fill), `python -m src.package_submission --team NAME`.
+- **Test run**: `python -m src.predict --model cache/models/E4.joblib --split test` → `output/matching_results.tsv` +
+  `output/candidate_pairs.tsv` (≈ 3.5–4.5 h on the laptop). Then run the official validator.
+- Optional: `--split validation` (full 441k validation entities) to measure the one-owner rule at realistic density.
 
 ## Next steps (Phase 12 → 15)
 1. E2 (more training data) and E3 (K=100) each gave a significant +0.003 over E1 (paired bootstrap CI above 0).

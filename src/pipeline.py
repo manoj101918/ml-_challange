@@ -14,7 +14,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from src.blocking import build_index, generate_candidates
-from src.features import FEATURE_COLUMNS, add_features, fit_tfidf
+from src.features import FAST_FEATURE_COLUMNS, FEATURE_COLUMNS, add_features, fit_tfidf
 from src.preprocessing import INDIAN_SCRIPTS, normalize
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -80,8 +80,9 @@ def pair_features(candidates, queries, pool_path, vectorizers, chunk_entities=10
             continue
         chunk = (chunk[["source1_entity_id", "candidate_id", "s1_row", "score_all", "score_name", "score_addr"]]
                  .merge(q, on="source1_entity_id").merge(text, on="candidate_id"))
-        chunk = add_features(chunk, *vectorizers)
-        parts.append(chunk[["source1_entity_id", "candidate_id"] + FEATURE_COLUMNS])
+        chunk = add_features(chunk, *(vectorizers or (None, None)))
+        columns = FEATURE_COLUMNS if vectorizers else FAST_FEATURE_COLUMNS
+        parts.append(chunk[["source1_entity_id", "candidate_id"] + columns])
         gc.collect()
     log(f"  features for {sum(len(p) for p in parts):,} pairs ({time.time() - start:.0f}s)")
     return pd.concat(parts, ignore_index=True)
@@ -95,12 +96,12 @@ def label_pairs(pairs, truth_tables):
     return np.array([(a, b) in true_keys for a, b in zip(pairs["source1_entity_id"], pairs["candidate_id"])], dtype="int8")
 
 
-def run_blocking_and_features(queries, split, name_steps, address_steps, top_k=50, max_df=1000, log=print):
+def run_blocking_and_features(queries, split, name_steps, address_steps, top_k=50, max_df=1000, use_tfidf=True, log=print):
     pool_path = normalized_pool(split, name_steps, address_steps, log=log)
     index = build_index(queries, pool_path, max_df=max_df, chunk_rows=250_000, log=log)   # small chunks: ~8 GB laptop
     candidates = generate_candidates(queries, index, top_k=top_k, ranking="all")
     del index
     gc.collect()
     log(f"  {len(candidates):,} candidates")
-    vectorizers = fit_vectorizers(pool_path)
-    return candidates, pair_features(candidates, queries, pool_path, vectorizers, log=log)
+    vectorizers = fit_vectorizers(pool_path) if use_tfidf else None
+    return candidates, pair_features(candidates, queries, pool_path, vectorizers, log=log), vectorizers

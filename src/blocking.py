@@ -139,18 +139,35 @@ def build_index_hashed(s1, pool_batches, n_pool, max_df, key_types=ALL_KEY_TYPES
             "is_name_key": is_name_key, "pool_ids": pool_ids}
 
 
-def iter_candidates(s1, index, top_k=50, batch_size=1_000, yield_every=10_000):
+def iter_candidates(s1, index, top_k=50, batch_size=5_000, yield_every=10_000):
     """Like generate_candidates(ranking="all"), but yields the candidates in pieces of ~`yield_every` S1 entities,
-    so the full candidate table (87M rows on the test set) never has to be in memory at once."""
-    q, pool_keys, idf, is_name_key = index["query_keys"], index["pool_keys"], index["idf"], index["is_name_key"]
-    q = q.sort_values("s1_row")
-    starts = np.searchsorted(q["s1_row"].to_numpy(), np.arange(0, len(s1) + batch_size, batch_size))
+    so the full candidate table (87-173M rows on the test set) never has to be in memory at once.
+
+    Speed: the pool keys are sorted by key code ONCE and an offset array records where each code's pool rows start
+    (like the index of a book). A batch then gathers its matching pool rows with NumPy arithmetic only —
+    no pandas merge, which would re-hash the whole pool-key table for every batch.
+    """
+    idf, is_name_key = index["idf"], index["is_name_key"]
+    pool_codes = index["pool_keys"]["code"].to_numpy()
+    order = np.argsort(pool_codes, kind="stable")
+    pool_rows_sorted = index["pool_keys"]["pool_row"].to_numpy()[order]
+    offsets = np.searchsorted(pool_codes[order], np.arange(len(idf) + 1))     # rows of code c: offsets[c]:offsets[c+1]
+
+    q = index["query_keys"].sort_values("s1_row")
+    q_rows, q_codes = q["s1_row"].to_numpy(), q["code"].to_numpy()
+    starts = np.searchsorted(q_rows, np.arange(0, len(s1) + batch_size, batch_size))
     kept = []
     for i, first in enumerate(range(0, len(s1), batch_size)):
-        part = q.iloc[starts[i]:starts[i + 1]].merge(pool_keys, on="code")
-        if not part.empty:
-            part["w"] = idf[part["code"]]
-            part["w_name"] = np.where(is_name_key[part["code"]], part["w"], 0.0)
+        rows, codes = q_rows[starts[i]:starts[i + 1]], q_codes[starts[i]:starts[i + 1]]
+        counts = offsets[codes + 1] - offsets[codes]
+        total = int(counts.sum())
+        if total:
+            begin = np.repeat(offsets[codes], counts)
+            within = np.arange(total) - np.repeat(np.cumsum(counts) - counts, counts)
+            code_rep = np.repeat(codes, counts)
+            weight = idf[code_rep]
+            part = pd.DataFrame({"s1_row": np.repeat(rows, counts), "pool_row": pool_rows_sorted[begin + within],
+                                 "w": weight, "w_name": np.where(is_name_key[code_rep], weight, 0.0)})
             pair = part.groupby(["s1_row", "pool_row"]).agg(score_all=("w", "sum"), score_name=("w_name", "sum")).reset_index()
             pair["score_addr"] = pair["score_all"] - pair["score_name"]
             kept.append(pair[pair.groupby("s1_row")["score_all"].rank(method="first", ascending=False) <= top_k])

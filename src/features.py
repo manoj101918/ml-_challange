@@ -16,13 +16,12 @@ import pandas as pd
 from rapidfuzz import fuzz, process
 from sklearn.feature_extraction.text import TfidfVectorizer
 
-from src.preprocessing import LEGAL_WORDS, replace_words
+from src.preprocessing import LEGAL_WORDS
 
 LEGAL_FORM = {  # only used to COMPARE legal forms, the text itself is not changed (Phase 6 showed that hurts)
     "pvt": "private", "ltd": "limited", "inc": "incorporated", "corp": "corporation", "co": "company",
 }
 LEGAL_SET = set(LEGAL_WORDS)
-_REMOVE_LEGAL = {word: "" for word in LEGAL_WORDS}
 
 
 # ---------------------------------------------------------------- helpers
@@ -63,12 +62,18 @@ def tfidf_cosine(vectorizer, left, right):
 
 # ---------------------------------------------------------------- the features
 
-def add_features(pairs, name_vectorizer, addr_vectorizer):
-    f = pairs
+def _core(word_lists):
+    """Name without legal words, built from the already-split words (one pass instead of 48 text replacements)."""
+    return pd.Series([" ".join(w for w in words if w not in LEGAL_SET) for words in word_lists], dtype="str")
+
+
+def add_features(pairs, name_vectorizer=None, addr_vectorizer=None):
+    """Adds the feature columns. Without vectorizers the two slow TF-IDF features are skipped (FAST_FEATURE_COLUMNS)."""
+    f = pairs.reset_index(drop=True)
     name_s1_words = f["name_s1"].str.split()
     name_c_words = f["name_c"].str.split()
-    core_s1 = replace_words(f["name_s1"], _REMOVE_LEGAL)
-    core_c = replace_words(f["name_c"], _REMOVE_LEGAL)
+    core_s1 = _core(name_s1_words)
+    core_c = _core(name_c_words)
 
     # --- name
     f["name_exact"] = (f["name_s1"] == f["name_c"]).astype("int8")
@@ -80,7 +85,8 @@ def add_features(pairs, name_vectorizer, addr_vectorizer):
     f["core_token_set"] = pairwise(fuzz.token_set_ratio, core_s1, core_c)
     f["core_partial"] = pairwise(fuzz.partial_ratio, core_s1, core_c)
     f["core_joined_ratio"] = pairwise(fuzz.ratio, core_s1.str.replace(" ", "", regex=False), core_c.str.replace(" ", "", regex=False))
-    f["name_tfidf"] = tfidf_cosine(name_vectorizer, f["name_s1"], f["name_c"])
+    if name_vectorizer is not None:
+        f["name_tfidf"] = tfidf_cosine(name_vectorizer, f["name_s1"], f["name_c"])
     f["name_len_diff"] = (f["name_s1"].str.len() - f["name_c"].str.len()).abs().astype("float32")
     if "name_c_foreign" in f:      # flag computed from the RAW name (after transliteration the normalized name is Latin)
         f["name_c_foreign_script"] = f["name_c_foreign"].astype("int8")
@@ -99,8 +105,9 @@ def add_features(pairs, name_vectorizer, addr_vectorizer):
     f["addr_ratio"] = pairwise(fuzz.ratio, f["addr_s1"], f["addr_c"])
     f["addr_token_set"] = pairwise(fuzz.token_set_ratio, f["addr_s1"], f["addr_c"])
     f["addr_token_sort"] = pairwise(fuzz.token_sort_ratio, f["addr_s1"], f["addr_c"])
-    f["addr_tfidf"] = tfidf_cosine(addr_vectorizer, f["addr_s1"], f["addr_c"])
-    for col in ["addr_ratio", "addr_token_set", "addr_token_sort", "addr_tfidf"]:
+    if addr_vectorizer is not None:
+        f["addr_tfidf"] = tfidf_cosine(addr_vectorizer, f["addr_s1"], f["addr_c"])
+    for col in [c for c in ["addr_ratio", "addr_token_set", "addr_token_sort", "addr_tfidf"] if c in f]:
         f.loc[f["addr_c_empty"] == 1, col] = np.nan          # "unknown", not "different"
 
     # --- numbers in the address (house / plot / door numbers)
@@ -136,3 +143,6 @@ FEATURE_COLUMNS = [
     "name_token_set_rel", "addr_token_set_rel",
     "is_source3",
 ]
+
+# Phase 12: the two TF-IDF features cost 64% of the feature time but only 0.001 F0.5 (experiments/phase12_ablation.tsv)
+FAST_FEATURE_COLUMNS = [c for c in FEATURE_COLUMNS if c not in ("name_tfidf", "addr_tfidf")]

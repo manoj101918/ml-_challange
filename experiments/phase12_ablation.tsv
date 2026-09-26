@@ -1,0 +1,3 @@
+variant	features	threshold	tuning_F0.5_oof	validation_F0.5
+all 34 features	34	0.7	0.9324	0.9341
+without TF-IDF (name_tfidf, addr_tfidf)	32	0.7	0.9305	0.933
