@@ -102,6 +102,15 @@ Rejected (measured, hurt or no gain): legal-word canonicalization/removal, dot-j
   `output/candidate_pairs.tsv` (≈ 3.5–4.5 h on the laptop). Then run the official validator.
 - Optional: `--split validation` (full 441k validation entities) to measure the one-owner rule at realistic density.
 
+## FINAL STATUS (2026-09-26): all phases complete
+- Test prediction ran on Kaggle (notebook `manojpabbineedi/notebook2390db6f21`, portable zip `portable/amazon_er_test_run.zip`):
+  172,769,341 candidate pairs, 5,380,195 predicted pairs, official validator PASS. Outputs are in `output/` (gitignored).
+- Phase 14 checks: `experiments/phase14_checks.py` → `experiments/phase14_checks.txt` (test behaves like validation; France fine).
+- Team **TechCrafters**: Manoj Kumar Pabbineedi, Pilla Prudhvi Lakshman, Marpu Giri Prasad, Tandasa Mourya.
+- Final package: `python -m src.package_submission --team TechCrafters` → `submission/TechCrafters_submission.zip`.
+- Possible future improvements (not done): Indian-script aware blocking keys (character n-grams), full-validation (441k)
+  density check of the one-owner rule, larger training set on a bigger machine, TF-IDF features back if compute allows.
+
 ## Next steps (Phase 12 → 15)
 1. E2 (more training data) and E3 (K=100) each gave a significant +0.003 over E1 (paired bootstrap CI above 0).
    Next experiment: **E4 = both together** (translit + 60k+ training entities + K=100); expected ≈ 0.944–0.945.

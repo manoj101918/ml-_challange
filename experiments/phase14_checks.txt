@@ -1,0 +1,27 @@
+=== 1. candidate_pairs.tsv (byte scan) ===
+rows: 1,732,544 (expected 1,732,544) | empty rows: 4 | Windows line endings: False
+candidate pairs: 172,769,341 (avg 99.7 per entity with candidates)
+possible same-country pairs: 6,724,569,566,212 -> reduction ratio 99.997431%
+
+=== 2. matching_results.tsv — what the predictions look like ===
+predicted pairs: 5,380,195 | S2/S3 IDs used by two S1 entities (one-owner rule): 0
+share of predicted IDs from S2 / S3: 0.488 / 0.512
+         entities  predicted_no_match_pct  avg_matches
+country                                               
+France     259452                     6.1         3.14
+India      809986                     7.0         3.04
+US         663106                     6.1         3.18
+
+=== 3. comparison with validation (model E4 on 20k held-out training entities) ===
+                             test predicted %  validation predicted %  validation TRUE %
+matches per entity (8 = 8+)                                                             
+0                                         6.5                     6.6                5.8
+1                                         9.7                     9.6                5.5
+2                                        20.3                    20.4               16.9
+3                                        24.3                    24.5               24.2
+4                                        19.7                    19.5               21.8
+5                                        11.7                    11.8               14.7
+6                                         5.3                     5.2                7.3
+7                                         1.9                     1.7                2.9
+8                                         0.6                     0.6                1.1
+avg matches per entity: test 3.11 | validation predicted 3.09 | validation true 3.45

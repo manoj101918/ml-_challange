@@ -1,8 +1,8 @@
 # ML Challenge 2026: Business Entity Resolution Solution Template
 
-**Team Name:** [Your Team Name]  
-**Team Members:** [List all team members]  
-**Submission Date:** [Date]
+**Team Name:** TechCrafters  
+**Team Members:** Manoj Kumar Pabbineedi, Pilla Prudhvi Lakshman, Marpu Giri Prasad, Tandasa Mourya  
+**Submission Date:** 2026-09-26
 
 ---
 
@@ -58,7 +58,8 @@ interval of the per-entity score difference lay above zero.
 - **Rare keys only:** a key must appear in ≤ 1,000 pool records. Each candidate is scored by the sum of idf = log(N/df) over the keys it
   shares with the S1 entity, and the **top 100** per entity are kept. No entity is left without candidates.
 - **Candidate pairs generated:** 100 per S1 entity (≈ 99.7 per entity on validation); on the test set
-  [TEST_CANDIDATES] candidate pairs for 1,732,544 S1 entities (reduction ratio ≈ 99.997% of same-country pairs).
+  **172,769,341 candidate pairs** for 1,732,544 S1 entities (99.7 per entity; only 4 entities without candidates),
+  out of 6.72 × 10¹² possible same-country pairs → **reduction ratio 99.9974%**.
 - **How we ensured true matches were not lost:** a diagnosis of every true pair on training entities showed that 98.4% share at least one
   key with df ≤ 1,000 and that the old single-word blocking lost most matches in the *ranking* step (look-alikes crowding them out);
   adding word-pair and joined-name keys and ranking by idf sum fixed this. Candidate recall on validation: **0.952** (K = 100) vs 0.940 (K = 50)
@@ -104,6 +105,10 @@ thresholds were tested and did not beat the global threshold. The model's probab
   | + transliteration of Indian scripts | 0.938 |
   | + 100 candidates, more training data, faster features (final) | **0.942** |
 
+- **Test-set predictions (no labels, so no score locally):** 5,380,195 predicted pairs; 6.5% of test entities predicted
+  "no match"; 3.11 matches per entity on average — almost identical to the same model on validation (6.6%, 3.09),
+  and **France, unseen in training, behaves like the other countries** (6.1% no match, 3.14 matches per entity vs 6.1% / 3.18 for US).
+  Official validator: PASS (including `--check-ids` for the matching file).
 - **Common false positives (wrong merges):** a different business at the *same address* (often with an Indian-script or invented brand
   name); records with the same generic name and no address; near-duplicate names and addresses that the ground truth treats as distinct
   businesses; pairs whose house numbers or legal forms conflict but whose other evidence is strong.

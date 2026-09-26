@@ -6,6 +6,7 @@ Change one thing at a time.
 
 | # | Date | Blocking | Candidate recall | Features | Model | Threshold | Small-val F0.5 | Notes |
 |---|---|---|---|---|---|---|---|---|
+| 15 | 2026-09-26 | E4 on the **test set** | — | — | E4 | 0.725 | (leaderboard) | 172,769,341 candidate pairs, 5,380,195 predicted pairs; validator PASS; distribution of matches per entity ≈ validation (experiments/phase14_checks.txt) |
 | 14 | 2026-09-26 | #3 with K = 100 | 0.952 | #10 **without the 2 TF-IDF features** (3.3x faster) | HGB, 40k training entities (4.0M pairs) | 0.725 | **0.9421** | phase12_run.py E4 = candidate final config, model saved to cache/models/E4.joblib; +0.0039 vs E1 (CI [0.0028, 0.0050]); vs E2/E3 +0.0005 (CI incl. 0) |
 | 13 | 2026-09-26 | #3 | 0.940 | #6 without name_tfidf / addr_tfidf | HGB, 20k | 0.70 | 0.9330 | phase12_ablation.py: −0.0011 vs #6 (0.9341) — TF-IDF is 64% of feature time, so dropped for speed |
 | 12 | 2026-09-26 | #3 with **K = 100** | **0.952** | #10 | HGB, 20k training entities (4.0M pairs) | 0.725 | **0.9415** | phase12_run.py E3; +0.0033 vs E1, 95% CI [+0.0023, +0.0044]; twice the pairs to score; not yet combined with #11 |
