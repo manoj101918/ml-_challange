@@ -44,7 +44,7 @@ def score_country(queries, pool_path, n_pool, artifacts, country, candidate_file
 
     scored, written = [], []
     n_done = 0
-    for candidates in iter_candidates(q, index, top_k=artifacts["top_k"], yield_every=yield_every):
+    for candidates in iter_candidates(q, index, top_k=artifacts["top_k"], batch_size=1_000, yield_every=yield_every):
         text = pool.take(candidates["pool_row"].to_numpy()).to_pandas()
         pairs = candidates[["source1_entity_id", "s1_row", "score_all", "score_name", "score_addr"]].reset_index(drop=True)
         pairs["candidate_id"] = text["entity_id"].to_numpy()
