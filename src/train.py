@@ -7,13 +7,16 @@ E1  + transliteration of Indian scripts (names and addresses)
 E2  E1 + more training entities (20k -> 60k)
 E3  E1 + K = 100 candidates per entity (20k training entities)
 E4  FINAL: translit + K = 100 + fast features (no TF-IDF) + 40k training entities -> cache/models/E4.joblib
+E5      score round: E4 + 150k training entities + stage-2 collective model (src/stage2.py)
+E5_xgb  E5 with XGBoost as the stage-1 learner, trained on the GPU (Colab A100); stage 2 stays HistGradientBoosting
 
-Model: HistGradientBoosting. Threshold: chosen on 3-fold out-of-fold predictions of the TRAINING entities;
-the 20k small-validation entities are only scored. Results -> experiments/phase12_results.tsv
+Model: HistGradientBoosting (or XGBoost, learner="xgb"). Threshold: chosen on 3-fold out-of-fold predictions of the
+TRAINING entities; the 20k small-validation entities are only scored. Results -> experiments/phase12_results.tsv
 """
 
 import csv
 import gc
+import os
 import sys
 import time
 from pathlib import Path
@@ -49,6 +52,9 @@ EXPERIMENTS = {
     # quick laptop check of the stage-2 wiring (small)
     "E5_small": dict(name_steps=TRANSLIT_NAME, address_steps=TRANSLIT_ADDRESS, extra_train=0, top_k=100, use_tfidf=False,
                      stage2=True),
+    # E5 with XGBoost on the GPU as the stage-1 learner (a second, different model; keep whichever validates better)
+    "E5_xgb": dict(name_steps=TRANSLIT_NAME, address_steps=TRANSLIT_ADDRESS, extra_train=130_000, top_k=100, use_tfidf=False,
+                   stage2=True, learner="xgb"),
 }
 HGB_STAGE2 = dict(max_iter=300, learning_rate=0.05, max_leaf_nodes=31, min_samples_leaf=40, l2_regularization=1.0,
                   early_stopping=False, random_state=0)
@@ -57,6 +63,17 @@ STAGE2_OUT = Path(__file__).resolve().parent.parent / "experiments" / "stage2_re
 HGB = dict(max_iter=400, learning_rate=0.1, max_leaf_nodes=63, min_samples_leaf=50, l2_regularization=1.0,
            early_stopping=False, random_state=0)
 THRESHOLDS = np.round(np.arange(0.50, 0.91, 0.025), 3)
+# XGBoost (Apache-2.0): more trees / leaves than HGB because 150k training entities can support a bigger model and the
+# GPU makes it cheap. Device from XGB_DEVICE ("cuda" on Colab, "cpu" for a laptop test).
+XGB = dict(n_estimators=800, learning_rate=0.05, tree_method="hist", grow_policy="lossguide", max_leaves=127, max_depth=0,
+           max_bin=256, min_child_weight=2, subsample=0.8, colsample_bytree=0.8, reg_lambda=1.0, random_state=0)
+
+
+def make_model(learner):
+    if learner == "xgb":
+        from xgboost import XGBClassifier
+        return XGBClassifier(**XGB, device=os.environ.get("XGB_DEVICE", "cuda"))
+    return HistGradientBoostingClassifier(**HGB)
 OUT = Path(__file__).resolve().parent.parent / "experiments" / "phase12_results.tsv"
 PER_ENTITY_DIR = Path(__file__).resolve().parent.parent / "output" / "experiments" / "phase12"
 
@@ -80,7 +97,7 @@ def macro(pairs, probabilities, threshold, truth_table):
     return score_report(to_submission(resolve_conflicts(chosen)), truth_table)
 
 
-def run(name, name_steps, address_steps, extra_train, top_k, use_tfidf=True, stage2=False):
+def run(name, name_steps, address_steps, extra_train, top_k, use_tfidf=True, stage2=False, learner="hgb"):
     start = time.time()
     log = lambda msg: print(f"[{name} {time.time() - start:5.0f}s] {msg}", flush=True)
     s1, truth = query_sets(extra_train)
@@ -106,13 +123,16 @@ def run(name, name_steps, address_steps, extra_train, top_k, use_tfidf=True, sta
 
     oof = np.zeros(len(train))
     for fit_idx, pred_idx in GroupKFold(n_splits=3).split(X, y, groups=train["source1_entity_id"]):
-        model = HistGradientBoostingClassifier(**HGB).fit(X.iloc[fit_idx], y[fit_idx])
+        model = make_model(learner).fit(X.iloc[fit_idx], y[fit_idx])
         oof[pred_idx] = model.predict_proba(X.iloc[pred_idx])[:, 1]
+        log(f"  fold fitted ({learner})")
     tuning_scores = [macro(train, oof, t, truth["tuning"])["macro_F0.5"] for t in THRESHOLDS]
     threshold = float(THRESHOLDS[int(np.argmax(tuning_scores))])
     log(f"out-of-fold done, threshold {threshold}")
 
-    model = HistGradientBoostingClassifier(**HGB).fit(X, y)
+    model = make_model(learner).fit(X, y)
+    if learner == "xgb":
+        model.set_params(device="cpu")        # the saved model predicts on any machine (GPU not required)
     artifacts = {"model": model, "threshold": threshold, "vectorizers": vectorizers, "features": features,
                  "name_steps": name_steps, "address_steps": address_steps, "top_k": top_k, "max_df": 1000}
     (CACHE_DIR / "models").mkdir(exist_ok=True)
