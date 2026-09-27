@@ -14,7 +14,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from src.blocking import build_index, generate_candidates
-from src.features import FAST_FEATURE_COLUMNS, FEATURE_COLUMNS, add_features, fit_tfidf
+from src.features import EXTRA_FEATURE_COLUMNS, FAST_FEATURE_COLUMNS, FEATURE_COLUMNS, add_features, fit_tfidf
 from src.preprocessing import INDIAN_SCRIPTS, normalize
 from src.progress import Progress
 
@@ -83,7 +83,7 @@ def pair_features(candidates, queries, pool_path, vectorizers, chunk_entities=10
             chunk = (chunk[["source1_entity_id", "candidate_id", "s1_row", "score_all", "score_name", "score_addr"]]
                      .merge(q, on="source1_entity_id").merge(text, on="candidate_id"))
             chunk = add_features(chunk, *(vectorizers or (None, None)))
-            columns = FEATURE_COLUMNS if vectorizers else FAST_FEATURE_COLUMNS
+            columns = (FEATURE_COLUMNS if vectorizers else FAST_FEATURE_COLUMNS) + EXTRA_FEATURE_COLUMNS
             parts.append(chunk[["source1_entity_id", "candidate_id"] + columns])
             gc.collect()
         progress.update()

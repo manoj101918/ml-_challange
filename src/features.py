@@ -60,6 +60,24 @@ def tfidf_cosine(vectorizer, left, right):
     return np.asarray(a.multiply(b).sum(axis=1)).ravel().astype("float32")
 
 
+def dice_lists(left, right):
+    out = np.full(len(left), np.nan, dtype="float32")
+    for i, (a, b) in enumerate(zip(left, right)):
+        sa, sb = set(a), set(b)
+        if sa and sb:
+            out[i] = 2.0 * len(sa & sb) / (len(sa) + len(sb))
+    return out
+
+
+def overlap_lists(left, right):
+    out = np.full(len(left), np.nan, dtype="float32")
+    for i, (a, b) in enumerate(zip(left, right)):
+        sa, sb = set(a), set(b)
+        if sa and sb:
+            out[i] = len(sa & sb) / min(len(sa), len(sb))
+    return out
+
+
 # ---------------------------------------------------------------- the features
 
 def _core(word_lists):
@@ -130,6 +148,23 @@ def add_features(pairs, name_vectorizer=None, addr_vectorizer=None):
     f["addr_token_set_rel"] = (f["addr_token_set"].fillna(0) - group["addr_token_set"].transform("max").fillna(0)).astype("float32")
 
     f["is_source3"] = f["candidate_id"].str.startswith("S3").astype("int8")
+
+    # --- extra word-overlap / length / number features (teammate's "E6_Ultra" set, used by config E7)
+    addr_s1_words, addr_c_words = f["addr_s1"].str.split(), f["addr_c"].str.split()
+    f["name_dice"] = dice_lists(name_s1_words, name_c_words)
+    f["name_overlap"] = overlap_lists(name_s1_words, name_c_words)
+    f["core_exact"] = (core_s1.to_numpy() == core_c.to_numpy()).astype("int8")
+    f["core_jaccard"] = jaccard_lists(core_s1.str.split(), core_c.str.split())
+    l1, l2 = f["name_s1"].str.len().to_numpy(), f["name_c"].str.len().to_numpy()
+    f["name_len_ratio"] = (np.minimum(l1, l2) / np.maximum(np.maximum(l1, l2), 1)).astype("float32")
+    f["addr_dice"] = dice_lists(addr_s1_words, addr_c_words)
+    f["addr_overlap"] = overlap_lists(addr_s1_words, addr_c_words)
+    a1, a2 = f["addr_s1"].str.len().to_numpy(), f["addr_c"].str.len().to_numpy()
+    f["addr_len_ratio"] = (np.minimum(a1, a2) / np.maximum(np.maximum(a1, a2), 1)).astype("float32")
+    for col in ["addr_dice", "addr_overlap", "addr_len_ratio"]:
+        f.loc[f["addr_c_empty"] == 1, col] = np.nan
+    f["num_exact_match"] = np.array([bool(a) and a == b for a, b in zip(nums_s1, nums_c)], dtype="int8")
+    f["num_diff_count"] = np.array([len(a ^ b) for a, b in zip(nums_s1, nums_c)], dtype="float32")
     return f
 
 
@@ -146,3 +181,6 @@ FEATURE_COLUMNS = [
 
 # Phase 12: the two TF-IDF features cost 64% of the feature time but only 0.001 F0.5 (experiments/phase12_ablation.tsv)
 FAST_FEATURE_COLUMNS = [c for c in FEATURE_COLUMNS if c not in ("name_tfidf", "addr_tfidf")]
+# teammate's extra features (giriprasad2304/Amazon_ML, "E6_Ultra"): computed always, used by models with extra_features=True
+EXTRA_FEATURE_COLUMNS = ["name_dice", "name_overlap", "core_exact", "core_jaccard", "name_len_ratio",
+                         "addr_dice", "addr_overlap", "addr_len_ratio", "num_exact_match", "num_diff_count"]
