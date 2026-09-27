@@ -80,7 +80,7 @@ def build_country(records, s1_c, n_s1, out_path, k=K_REVERSE, chunk=500_000, log
     index = s1_index(s1_c, n_s1)
     progress = Progress(len(records), f"reverse {out_path.stem}: records", log)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out_path.with_suffix(".tmp")
+    tmp = out_path.with_suffix(f".{os.getpid()}.tmp")          # one temp file per process: parallel runs never share one
     writer = None
     for first in range(0, len(records), chunk):
         part = records.iloc[first:first + chunk].reset_index(drop=True)
@@ -103,12 +103,17 @@ def build_country(records, s1_c, n_s1, out_path, k=K_REVERSE, chunk=500_000, log
 
 
 def build(split, name_steps=TRANSLIT_NAME, address_steps=TRANSLIT_ADDRESS, countries=None, k=K_REVERSE,
-          chunk=500_000, log=print):
+          chunk=500_000, part=None, parts=None, log=print):
+    """part/parts: build only slice `part` (0-based) of `parts` equal slices of the records -> a file
+    {split}_{tag}_{country}_p{part}of{parts}.parquet, so several processes can build one country in parallel
+    (each record's top-k does not depend on the other records, so the parts together equal the whole table)."""
     tag = normalization_tag(name_steps, address_steps)
     pool_path = normalized_pool(split, name_steps, address_steps, log=log)
     s1_all = pd.read_parquet(CACHE_DIR / f"{split}_source1.parquet")
     for country in countries or sorted(s1_all["country"].unique()):
         out = reverse_path(split, tag, country)
+        if parts:
+            out = out.with_name(f"{out.stem}_p{part}of{parts}.parquet")
         if out.exists():
             log(f"{out.name} exists - skipped")
             continue
@@ -117,6 +122,8 @@ def build(split, name_steps=TRANSLIT_NAME, address_steps=TRANSLIT_ADDRESS, count
         s1_c = s1_c[["entity_id", "country", "name_norm", "addr_norm"]]
         records = pq.read_table(pool_path, columns=["entity_id", "country", "name_norm", "addr_norm"],
                                 filters=[("country", "=", country)]).to_pandas()
+        if parts:
+            records = records.iloc[np.array_split(np.arange(len(records)), parts)[part]].reset_index(drop=True)
         log(f"reverse {split} {country}: {len(records):,} records vs {len(s1_c):,} S1")
         build_country(records, s1_c, len(s1_all), out, k=k, chunk=chunk, log=log)
         log(f"wrote {out.name} ({time.time() - start:.0f}s)")
@@ -176,8 +183,15 @@ class ReverseLookup:
 
 
 def load_lookup(split, tag, countries=None, log=print):
-    paths = [reverse_path(split, tag, c) for c in countries] if countries else sorted(REVERSE_DIR.glob(f"{split}_{tag}_*.parquet"))
-    missing = [p.name for p in paths if not p.exists()]
+    if countries:                                  # the whole-country file, or its _pXofN parts
+        paths, missing = [], []
+        for c in countries:
+            whole = reverse_path(split, tag, c)
+            found = [whole] if whole.exists() else sorted(REVERSE_DIR.glob(f"{whole.stem}_p*of*.parquet"))
+            paths += found
+            missing += [] if found else [whole.name]
+    else:
+        paths, missing = sorted(REVERSE_DIR.glob(f"{split}_{tag}_*.parquet")), []
     if missing or not paths:
         raise FileNotFoundError(f"reverse tables missing: {missing or split + '_' + tag + '_*'} - run python -m src.reverse --split {split}")
     table = pd.concat([pd.read_parquet(p) for p in paths], ignore_index=True)
@@ -197,9 +211,11 @@ def main():
     parser.add_argument("--split", choices=["train", "test"], required=True)
     parser.add_argument("--countries", nargs="*")
     parser.add_argument("--chunk", type=int, default=500_000)
+    parser.add_argument("--part", type=int)
+    parser.add_argument("--parts", type=int)
     args = parser.parse_args()
     start = time.time()
-    build(args.split, countries=args.countries, chunk=args.chunk,
+    build(args.split, countries=args.countries, chunk=args.chunk, part=args.part, parts=args.parts,
           log=lambda msg: print(f"[{time.time() - start:6.0f}s] {msg}", flush=True))
 
 
