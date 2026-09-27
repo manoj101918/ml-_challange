@@ -23,8 +23,9 @@ import pyarrow.parquet as pq
 from src.blocking import build_index_hashed, iter_candidates
 from src.decision import global_threshold, resolve_conflicts
 from src.features import add_features
-from src.pipeline import CACHE_DIR, PROJECT_ROOT, normalized_pool, prepare_queries
+from src.pipeline import CACHE_DIR, PROJECT_ROOT, normalization_tag, normalized_pool, prepare_queries
 from src.progress import Progress
+from src.reverse import add_reverse_features, load_lookup
 from src.stage2 import stage2_features
 from src.submission import write_id_list_file
 
@@ -32,7 +33,7 @@ KEEP_PROBABILITY = 0.30      # scored pairs below this are dropped right away (f
 
 
 def score_country(queries, pool_path, n_pool, artifacts, country, candidate_file, chunk_rows=250_000, yield_every=5_000,
-                  log=print, overall=None):
+                  log=print, overall=None, lookup=None):
     """Probabilities for the S1 entities of one country. Candidate lists are written straight to `candidate_file`
     (on the test set they are ~2 GB of text, too big to keep in memory). Returns (scored pairs, IDs written)."""
     start = time.time()
@@ -55,6 +56,8 @@ def score_country(queries, pool_path, n_pool, artifacts, country, candidate_file
         pairs["name_c_foreign"] = text["name_foreign"].to_numpy()
         pairs = pairs.merge(q_text, on="source1_entity_id")
         pairs = add_features(pairs, *(artifacts["vectorizers"] or (None, None)))
+        if lookup is not None:                                      # reverse competition features (models with reverse=True)
+            pairs = add_reverse_features(pairs, lookup)
         pairs["probability"] = artifacts["model"].predict_proba(pairs[artifacts["features"]].astype("float32"))[:, 1]
         n_chunk = pairs["source1_entity_id"].nunique()
         if "stage2_model" in artifacts:
@@ -82,9 +85,11 @@ def score_country(queries, pool_path, n_pool, artifacts, country, candidate_file
     return pd.concat(scored, ignore_index=True), np.concatenate(written) if written else np.array([], dtype=object)
 
 
-def predict(split, s1, artifacts, candidate_path, log=print):
+def predict(split, s1, artifacts, candidate_path, log=print, only_countries=None):
     """Writes candidate_pairs.tsv to `candidate_path` (one row per S1 entity in `s1`);
-    returns (matching_results with one row per S1 entity, scored pairs)."""
+    returns (matching_results with one row per S1 entity, scored pairs).
+    only_countries: score just these countries (their checkpoints) and return (None, None) - for parallel sessions;
+    a later run without it finds every country done and only assembles the two output files."""
     queries = prepare_queries(s1, artifacts["name_steps"], artifacts["address_steps"])
     pool_path = normalized_pool(split, artifacts["name_steps"], artifacts["address_steps"], log=log)
     n_pool = pq.ParquetFile(pool_path).metadata.num_rows
@@ -95,19 +100,24 @@ def predict(split, s1, artifacts, candidate_path, log=print):
     scored, written = [], []
     countries = sorted(queries["country"].unique())                  # open set of countries - nothing hard-coded
     file_name = lambda country: "".join(ch if ch.isalnum() else "_" for ch in country)
-    to_do = [c for c in countries if not (parts / f"{file_name(c)}.done").exists()]
+    to_do = [c for c in countries if not (parts / f"{file_name(c)}.done").exists() and (not only_countries or c in only_countries)]
     # ETA over ALL remaining countries (the first estimate includes each country's index build, so it settles after a while)
     overall = Progress(int(queries["country"].isin(to_do).sum()), "ALL COUNTRIES: entities", log, every=300)
     for country in countries:
+        if only_countries and country not in only_countries:
+            continue
         name = file_name(country)
         done, part_scored = parts / f"{name}.done", parts / f"{name}_scored.parquet"
         part_ids, part_candidates = parts / f"{name}_ids.parquet", parts / f"{name}_candidates.tsv"
         if done.exists():
             log(f"  {country}: already done (checkpoint), skipped")
         else:
+            lookup = (load_lookup(split, normalization_tag(artifacts["name_steps"], artifacts["address_steps"]), [country], log=log)
+                      if artifacts.get("reverse") else None)
             with open(part_candidates, "w", encoding="utf-8", newline="\n") as candidate_file:
                 pairs, ids = score_country(queries, pool_path, n_pool, artifacts, country, candidate_file, log=log,
-                                           overall=overall)
+                                           overall=overall, lookup=lookup)
+            del lookup
             pairs.to_parquet(part_scored, index=False)
             pd.DataFrame({"source1_entity_id": ids}).to_parquet(part_ids, index=False)
             done.touch()
@@ -115,6 +125,9 @@ def predict(split, s1, artifacts, candidate_path, log=print):
             gc.collect()
         scored.append(pd.read_parquet(part_scored))
         written.append(pd.read_parquet(part_ids)["source1_entity_id"].to_numpy())
+    if only_countries:
+        log(f"countries {only_countries} done - run again without --countries to write the output files")
+        return None, None
 
     with open(candidate_path, "w", encoding="utf-8", newline="\n") as candidate_file:
         candidate_file.write("source1_entity_id\tcandidate_entity_ids\n")
@@ -141,6 +154,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", required=True)
     parser.add_argument("--split", choices=["test", "validation", "small_validation"], default="test")
+    parser.add_argument("--countries", nargs="*", help="only score these countries (parallel sessions); omit to assemble")
     args = parser.parse_args()
     start = time.time()
     log = lambda msg: print(f"[{time.time() - start:6.0f}s] {msg}", flush=True)
@@ -149,7 +163,9 @@ def main():
     if args.split == "test":
         s1 = pd.read_parquet(CACHE_DIR / "test_source1.parquet")
         out = PROJECT_ROOT / "output"
-        matching, scored = predict("test", s1, artifacts, out / "candidate_pairs.tsv", log=log)
+        matching, scored = predict("test", s1, artifacts, out / "candidate_pairs.tsv", log=log, only_countries=args.countries)
+        if matching is None:
+            return
         write_id_list_file(matching, out / "matching_results.tsv", "matched_entity_ids")
         scored.to_parquet(CACHE_DIR / "test_scored_pairs.parquet", index=False)
         log(f"wrote output/matching_results.tsv and output/candidate_pairs.tsv "
@@ -165,7 +181,9 @@ def main():
         s1 = pd.read_parquet(CACHE_DIR / "train_source1.parquet")
         s1 = s1[s1["entity_id"].isin(validation_ids)].reset_index(drop=True)
         candidate_path = PROJECT_ROOT / "output" / f"{args.split}_candidate_pairs.tsv"
-        matching, scored = predict("train", s1, artifacts, candidate_path, log=log)
+        matching, scored = predict("train", s1, artifacts, candidate_path, log=log, only_countries=args.countries)
+        if matching is None:
+            return
         candidates = pd.read_csv(candidate_path, sep="	", keep_default_na=False)
         truth = gt[gt["source1_entity_id"].isin(validation_ids)]
         report = score_report(matching, truth)

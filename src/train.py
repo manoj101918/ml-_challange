@@ -9,6 +9,7 @@ E3  E1 + K = 100 candidates per entity (20k training entities)
 E4  FINAL: translit + K = 100 + fast features (no TF-IDF) + 40k training entities -> cache/models/E4.joblib
 E5      score round: E4 + 150k training entities + stage-2 collective model (src/stage2.py)
 E5_xgb  E5 with XGBoost as the stage-1 learner, trained on the GPU (Colab A100); stage 2 stays HistGradientBoosting
+E6      E5_xgb + reverse "competition" features (src/reverse.py; needs the train reverse tables: python -m src.reverse --split train)
 
 Model: HistGradientBoosting (or XGBoost, learner="xgb"). Threshold: chosen on 3-fold out-of-fold predictions of the
 TRAINING entities; the 20k small-validation entities are only scored. Results -> experiments/phase12_results.tsv
@@ -30,9 +31,10 @@ from sklearn.model_selection import GroupKFold
 from src.decision import global_threshold, resolve_conflicts, to_submission
 from src.evaluation import score_per_entity, score_report
 from src.features import FAST_FEATURE_COLUMNS, FEATURE_COLUMNS
-from src.pipeline import CACHE_DIR, label_pairs, prepare_queries, run_blocking_and_features
+from src.pipeline import CACHE_DIR, label_pairs, normalization_tag, prepare_queries, run_blocking_and_features
 from src.preprocessing import ADDRESS_STEPS, NAME_STEPS
 from src.progress import Progress
+from src.reverse import REVERSE_COLUMNS, add_reverse_features, load_lookup
 from src.rule_experiment import TRAIN_DIR, load_query_sets
 from src.splits import make_validation_split
 
@@ -56,6 +58,9 @@ EXPERIMENTS = {
     # E5 with XGBoost on the GPU as the stage-1 learner (a second, different model; keep whichever validates better)
     "E5_xgb": dict(name_steps=TRANSLIT_NAME, address_steps=TRANSLIT_ADDRESS, extra_train=130_000, top_k=100, use_tfidf=False,
                    stage2=True, learner="xgb"),
+    # round 2: + reverse competition features (every record's favourite S1, full density; +0.0102 on Phase 8 pairs)
+    "E6": dict(name_steps=TRANSLIT_NAME, address_steps=TRANSLIT_ADDRESS, extra_train=130_000, top_k=100, use_tfidf=False,
+               stage2=True, learner="xgb", reverse=True),
 }
 HGB_STAGE2 = dict(max_iter=300, learning_rate=0.05, max_leaf_nodes=31, min_samples_leaf=40, l2_regularization=1.0,
                   early_stopping=False, random_state=0)
@@ -107,7 +112,7 @@ def threshold_scores(pairs, probabilities, thresholds, truth_table, log):
     return scores
 
 
-def run(name, name_steps, address_steps, extra_train, top_k, use_tfidf=True, stage2=False, learner="hgb"):
+def run(name, name_steps, address_steps, extra_train, top_k, use_tfidf=True, stage2=False, learner="hgb", reverse=False):
     start = time.time()
     log = lambda msg: print(f"[{name} {time.time() - start:5.0f}s] {msg}", flush=True)
     s1, truth = query_sets(extra_train)
@@ -117,6 +122,12 @@ def run(name, name_steps, address_steps, extra_train, top_k, use_tfidf=True, sta
     features = FEATURE_COLUMNS if use_tfidf else FAST_FEATURE_COLUMNS
     pairs = pairs.merge(queries[["entity_id", "query_set"]], left_on="source1_entity_id", right_on="entity_id").drop(columns="entity_id")
     pairs["label"] = label_pairs(pairs, list(truth.values()))
+    if reverse:
+        lookup = load_lookup("train", normalization_tag(name_steps, address_steps), log=log)
+        pairs = add_reverse_features(pairs, lookup)
+        del lookup
+        gc.collect()
+        features = features + REVERSE_COLUMNS
 
     recall = {}
     for set_name in ["tuning", "validation"]:
@@ -147,7 +158,8 @@ def run(name, name_steps, address_steps, extra_train, top_k, use_tfidf=True, sta
     if learner == "xgb":
         model.set_params(device="cpu")        # the saved model predicts on any machine (GPU not required)
     artifacts = {"model": model, "threshold": threshold, "vectorizers": vectorizers, "features": features,
-                 "name_steps": name_steps, "address_steps": address_steps, "top_k": top_k, "max_df": 1000}
+                 "name_steps": name_steps, "address_steps": address_steps, "top_k": top_k, "max_df": 1000,
+                 "reverse": reverse}
     (CACHE_DIR / "models").mkdir(exist_ok=True)
     joblib.dump(artifacts, CACHE_DIR / "models" / f"{name}.joblib")
     p_valid = model.predict_proba(valid[features].astype("float32"))[:, 1]

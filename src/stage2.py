@@ -13,12 +13,15 @@ import numpy as np
 import pandas as pd
 from rapidfuzz import fuzz, process
 
+from src.reverse import REVERSE_COLUMNS
+
 MIN_P1 = 0.01          # pairs below this are "no" without further work (they are ~0 in practice)
 CONFIDENT = 0.90       # a candidate at or above this counts as a confident match of its entity
 TOP_CONFIDENT = 3      # compare each candidate with at most this many confident matches
 
 STAGE1_CONTEXT = ["name_token_set", "core_joined_ratio", "addr_token_set", "num_shared", "num_conflict",
-                  "legal_conflict", "block_score_rel", "block_rank", "addr_c_empty", "name_c_foreign_script", "is_source3"]
+                  "legal_conflict", "block_score_rel", "block_rank", "addr_c_empty", "name_c_foreign_script", "is_source3"
+                  ] + REVERSE_COLUMNS                    # used only when present (models trained with reverse=True)
 CONTEXT_FEATURES = ["p1", "p1_rank", "p1_gap_to_best", "p1_best_other", "n_confident", "n_confident_same_source",
                     "n_confident_other_source", "n_above_half", "has_confident_other",
                     "conf_name_token_set", "conf_name_ratio", "conf_joined_ratio", "conf_addr_token_set",
