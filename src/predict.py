@@ -26,14 +26,14 @@ from src.features import add_features
 from src.pipeline import CACHE_DIR, PROJECT_ROOT, normalization_tag, normalized_pool, prepare_queries
 from src.progress import Progress
 from src.reverse import add_reverse_features, load_lookup
-from src.stage2 import stage2_features
+from src.stage2 import noise_features, stage2_features, word_frequencies
 from src.submission import write_id_list_file
 
 KEEP_PROBABILITY = 0.30      # scored pairs below this are dropped right away (far below the ~0.7 threshold)
 
 
 def score_country(queries, pool_path, n_pool, artifacts, country, candidate_file, chunk_rows=250_000, yield_every=5_000,
-                  log=print, overall=None, lookup=None):
+                  log=print, overall=None, lookup=None, word_freq=None):
     """Probabilities for the S1 entities of one country. Candidate lists are written straight to `candidate_file`
     (on the test set they are ~2 GB of text, too big to keep in memory). Returns (scored pairs, IDs written)."""
     start = time.time()
@@ -64,6 +64,8 @@ def score_country(queries, pool_path, n_pool, artifacts, country, candidate_file
             # stage 1 acts as a filter (p1 >= MIN_P1); the final model = stage 2 scores only those pairs,
             # so candidate_pairs.tsv lists exactly the pairs the final model scored
             pairs = stage2_features(pairs.rename(columns={"probability": "p1"}))
+            if word_freq is not None and len(pairs):                # E8 noise-model features
+                pairs = noise_features(pairs, word_freq)
             if len(pairs):
                 pairs["probability"] = artifacts["stage2_model"].predict_proba(
                     pairs[artifacts["stage2_features"]].astype("float32"))[:, 1]
@@ -93,6 +95,7 @@ def predict(split, s1, artifacts, candidate_path, log=print, only_countries=None
     queries = prepare_queries(s1, artifacts["name_steps"], artifacts["address_steps"])
     pool_path = normalized_pool(split, artifacts["name_steps"], artifacts["address_steps"], log=log)
     n_pool = pq.ParquetFile(pool_path).metadata.num_rows
+    word_freq = word_frequencies(split, artifacts["name_steps"], artifacts["address_steps"], log=log) if artifacts.get("noise") else None
 
     # checkpoints: every finished country is saved, so a stopped run resumes where it left off
     parts = CACHE_DIR / f"predict_parts_{split}_{Path(candidate_path).stem}"
@@ -116,7 +119,7 @@ def predict(split, s1, artifacts, candidate_path, log=print, only_countries=None
                       if artifacts.get("reverse") else None)
             with open(part_candidates, "w", encoding="utf-8", newline="\n") as candidate_file:
                 pairs, ids = score_country(queries, pool_path, n_pool, artifacts, country, candidate_file, log=log,
-                                           overall=overall, lookup=lookup)
+                                           overall=overall, lookup=lookup, word_freq=word_freq)
             del lookup
             pairs.to_parquet(part_scored, index=False)
             pd.DataFrame({"source1_entity_id": ids}).to_parquet(part_ids, index=False)

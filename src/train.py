@@ -10,6 +10,7 @@ E4  FINAL: translit + K = 100 + fast features (no TF-IDF) + 40k training entitie
 E5      score round: E4 + 150k training entities + stage-2 collective model (src/stage2.py)
 E5_xgb  E5 with XGBoost as the stage-1 learner, trained on the GPU (Colab A100); stage 2 stays HistGradientBoosting
 E7      E6 + the teammate's 10 extra overlap/length/number features (EXTRA_FEATURE_COLUMNS)
+E8      E7 + "noise model" features in stage 2 (src/stage2.NOISE_FEATURES: fuzzy house numbers, unmatched-word frequency)
 E6      E5_xgb + reverse "competition" features (src/reverse.py; needs the train reverse tables: python -m src.reverse --split train)
 
 Model: HistGradientBoosting (or XGBoost, learner="xgb"). Threshold: chosen on 3-fold out-of-fold predictions of the
@@ -64,6 +65,8 @@ EXPERIMENTS = {
                stage2=True, learner="xgb", reverse=True),
     "E7": dict(name_steps=TRANSLIT_NAME, address_steps=TRANSLIT_ADDRESS, extra_train=130_000, top_k=100, use_tfidf=False,
                stage2=True, learner="xgb", reverse=True, extra_features=True),
+    "E8": dict(name_steps=TRANSLIT_NAME, address_steps=TRANSLIT_ADDRESS, extra_train=130_000, top_k=100, use_tfidf=False,
+               stage2=True, learner="xgb", reverse=True, extra_features=True, noise=True),
 }
 HGB_STAGE2 = dict(max_iter=300, learning_rate=0.05, max_leaf_nodes=31, min_samples_leaf=40, l2_regularization=1.0,
                   early_stopping=False, random_state=0)
@@ -116,7 +119,7 @@ def threshold_scores(pairs, probabilities, thresholds, truth_table, log):
 
 
 def run(name, name_steps, address_steps, extra_train, top_k, use_tfidf=True, stage2=False, learner="hgb", reverse=False,
-        extra_features=False):
+        extra_features=False, noise=False):
     start = time.time()
     log = lambda msg: print(f"[{name} {time.time() - start:5.0f}s] {msg}", flush=True)
     s1, truth = query_sets(extra_train)
@@ -163,7 +166,7 @@ def run(name, name_steps, address_steps, extra_train, top_k, use_tfidf=True, sta
         model.set_params(device="cpu")        # the saved model predicts on any machine (GPU not required)
     artifacts = {"model": model, "threshold": threshold, "vectorizers": vectorizers, "features": features,
                  "name_steps": name_steps, "address_steps": address_steps, "top_k": top_k, "max_df": 1000,
-                 "reverse": reverse}
+                 "reverse": reverse, "noise": noise}
     (CACHE_DIR / "models").mkdir(exist_ok=True)
     joblib.dump(artifacts, CACHE_DIR / "models" / f"{name}.joblib")
     p_valid = model.predict_proba(valid[features].astype("float32"))[:, 1]
@@ -192,14 +195,15 @@ def run(name, name_steps, address_steps, extra_train, top_k, use_tfidf=True, sta
     log(f"DONE {row}")
 
     if stage2:
+        s1_text = queries.set_index("entity_id")[["name_norm", "addr_norm"]] if noise else None
         train_stage2(name, train.assign(p1=oof), valid.assign(p1=p_valid), truth, artifacts,
-                     name_steps, address_steps, report["macro_F0.5"], log)
+                     name_steps, address_steps, report["macro_F0.5"], log, s1_text=s1_text)
 
 
-def train_stage2(name, train, valid, truth, artifacts, name_steps, address_steps, stage1_f05, log):
+def train_stage2(name, train, valid, truth, artifacts, name_steps, address_steps, stage1_f05, log, s1_text=None):
     """Stage 2 on the OUT-OF-FOLD stage-1 probabilities of the training entities (see src/stage2.py)."""
     from src.pipeline import normalized_pool
-    from src.stage2 import MIN_P1, feature_columns, stage2_features
+    from src.stage2 import MIN_P1, feature_columns, noise_features, stage2_features, word_frequencies
 
     train, valid = train[train["p1"] >= MIN_P1], valid[valid["p1"] >= MIN_P1]
     ids = pd.concat([train["candidate_id"], valid["candidate_id"]]).unique().tolist()
@@ -209,6 +213,13 @@ def train_stage2(name, train, valid, truth, artifacts, name_steps, address_steps
     log(f"stage 2: features for {len(train) + len(valid):,} pairs with p1 >= {MIN_P1}")
     s2_train = stage2_features(train.merge(text, on="candidate_id"))
     s2_valid = stage2_features(valid.merge(text, on="candidate_id"))
+    if s1_text is not None:                          # E8: noise-model features need the S1 texts too
+        freq = word_frequencies("train", name_steps, address_steps, log=log)
+        for s2 in (s2_train, s2_valid):
+            s2["name_s1"] = s2["source1_entity_id"].map(s1_text["name_norm"]).to_numpy()
+            s2["addr_s1"] = s2["source1_entity_id"].map(s1_text["addr_norm"]).to_numpy()
+        s2_train, s2_valid = noise_features(s2_train, freq), noise_features(s2_valid, freq)
+        log("stage 2: noise-model features added")
     columns = feature_columns(s2_train)
     X, y = s2_train[columns].astype("float32"), s2_train["label"].to_numpy()
     log(f"stage 2: {len(s2_train):,} training pairs, {len(columns)} features")
